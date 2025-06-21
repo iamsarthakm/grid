@@ -115,4 +115,10 @@ Hey there! If you've ever wanted a Google Sheets-style app you can hack on, you'
 - Try typing formulas and see them update live
 - If you want to get fancy, try disconnecting/reconnecting or simulating slow network (DevTools > Network > Slow 3G)
 
+
+## HLD
+
+<img width="862" alt="image" src="https://github.com/user-attachments/assets/481758e1-a398-48ab-84d4-44b9dadba7f1" />
+
+
 ---
