@@ -59,11 +59,11 @@ const getRangeValues = (range, getCellValue) => {
 };
 
 const evaluateFormula = (formula, getCellValue) => {
-    formula = formula.replace(/(SUM|AVERAGE|COUNT)\(([^)]+)\)/gi, (match, fn, arg) => {
+    formula = formula.replace(/(SUM|AVG|COUNT)\(([^)]+)\)/gi, (match, fn, arg) => {
         const values = getRangeValues(arg.trim(), getCellValue);
         if (fn.toUpperCase() === 'SUM') {
             return values.reduce((acc, v) => acc + (parseFloat(v) || 0), 0);
-        } else if (fn.toUpperCase() === 'AVERAGE') {
+        } else if (fn.toUpperCase() === 'AVG') {
             const nums = values.map(v => parseFloat(v)).filter(v => !isNaN(v));
             return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
         } else if (fn.toUpperCase() === 'COUNT') {
@@ -115,6 +115,14 @@ function Grid() {
     // Refs
     const cellRefs = useRef({});
 
+    // Helper functions
+    const getCellValue = (row, col) => {
+        if (row < 0 || row >= gridData.length || col < 0 || col >= (gridData[0]?.length || 0)) {
+            return '';
+        }
+        return gridData[row][col]?.value || '';
+    };
+
     // Derived state
     const displayGrid = gridData.map((row, rowIdx) =>
         row.map((cell, colIdx) => {
@@ -127,14 +135,6 @@ function Grid() {
             return { ...cell, display: val };
         })
     );
-
-    // Helper functions
-    const getCellValue = (row, col) => {
-        if (row < 0 || row >= gridData.length || col < 0 || col >= (gridData[0]?.length || 0)) {
-            return '';
-        }
-        return gridData[row][col]?.value || '';
-    };
 
     const updateUserPresence = (users) => {
         const usersObj = {};
