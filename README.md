@@ -8,7 +8,7 @@ Hey there! If you've ever wanted a Google Sheets-style app you can hack on, you'
 
 1. **Clone this repo:**
    ```bash
-   git clone <repo-url>
+   git clone [<repo-url>](https://github.com/iamsarthakm/grid.git)
    cd grid-fe
    ```
 2. **Install everything:**
