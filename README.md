@@ -4,6 +4,14 @@ Hey there! If you've ever wanted a Google Sheets-style app you can hack on, you'
 
 ---
 
+## 🚦 Use Application:
+
+1. **RUN** 
+   ```bash
+   node server.js
+   ```
+2. Open Link: https://cute-chaja-45f4d3.netlify.app/
+
 ## 🚦 Quick Start: Running Locally
 
 1. **Clone this repo:**
