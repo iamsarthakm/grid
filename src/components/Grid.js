@@ -533,7 +533,7 @@ function Grid() {
                 ))}
             </div>
 
-            <div style={{ marginBottom: '20px' }}>
+            {/* <div style={{ marginBottom: '20px' }}>
                 <button
                     onClick={handleAddRow}
                     style={buttonStyle}
@@ -560,7 +560,7 @@ function Grid() {
                 >
                     Delete Column
                 </button>
-            </div>
+            </div> */}
 
             <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 150px)' }}>
                 <table style={{ borderCollapse: 'collapse', width: '100%' }}>

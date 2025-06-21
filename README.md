@@ -1,70 +1,110 @@
-# Getting Started with Create React App
+# Collaborative Spreadsheet (Grid)
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+Hey there! If you've ever wanted a Google Sheets-style app you can hack on, you're in the right place. This is a fun, live-editing spreadsheet you can run locally and play with friends or teammates.
 
-## Available Scripts
+---
 
-In the project directory, you can run:
+## 🚦 Quick Start: Running Locally
 
-### `npm start`
+1. **Clone this repo:**
+   ```bash
+   git clone <repo-url>
+   cd grid-fe
+   ```
+2. **Install everything:**
+   ```bash
+   npm install
+   ```
+3. **Start the backend (WebSocket server):**
+   ```bash
+   node server.js
+   ```
+4. **Start the frontend (React app):**
+   ```bash
+   npm start
+   ```
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+- Open [http://localhost:3000](http://localhost:3000) in your browser.
+- The backend runs on ws://localhost:8080
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+---
 
-### `npm test`
+## 🏗️ How It's Built (Architecture in Plain English)
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+- **Frontend (React):**
+  - Shows a big grid of cells (like Excel, but simpler)
+  - Handles typing, clicking, and moving around
+  - Lets you add/delete rows and columns
+  - Shows who else is online and where their cursor is
+  - Talks to the backend in real time
 
-### `npm run build`
+- **Backend (Node.js + WebSocket):**
+  - Keeps track of all the cell values (the "source of truth")
+  - Handles lots of users at once
+  - Makes sure everyone sees the same thing
+  - Resolves conflicts if two people edit the same cell (last one wins)
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+- **Sync:**
+  - Every change you make is sent to the server and instantly shared with everyone else. It's like magic!
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+---
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+## Collaboration Features
 
-### `npm run eject`
+- See other people's cursors and edits as they happen
+- Instantly updates for everyone (no refresh needed)
+- Each user gets a color and a name (pick your own!)
+- If two people edit the same cell, the last change wins (simple and predictable)
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+---
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+## What Can You Do?
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+- Edit a 100x26 spreadsheet
+- Type numbers, text, or formulas (try `=SUM(A1:A3)`!)
+- See who's online and where they're editing
+- Watch cells highlight when someone else changes them
+- All changes are live and shared
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+---
 
-## Learn More
+## Why I Built It This Way
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+- **WebSocket:** For super-fast, real-time updates
+- **Last-write-wins:** It's simple and avoids weird merge issues
+- **Formulas on the client:** Keeps the server light and fast
+- **Colors for users:** Makes it easy to see who's who
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+---
 
-### Code Splitting
+## What's Missing (for now)
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+- No login or authentication (anyone can join, so don't use for secrets!)
+- Data isn't saved if you restart the server
+- No import/export yet
+- No fancy spreadsheet stuff (like charts or merged cells)
+- Formulas only work in your browser (not checked by the server)
 
-### Analyzing the Bundle Size
+---
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+## What I'd Add Next
 
-### Making a Progressive Web App
+- User accounts and login
+- Save data to a real database
+- Import/export (CSV, Excel, etc.)
+- Server-side formula checks
+- More spreadsheet features (sorting, comments, etc.)
+- Make it look great on mobile
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+---
 
-### Advanced Configuration
+## How to Test It (Collaboration Style)
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+- Open the app in two browser windows (or invite a friend!)
+- Try editing the same cell at the same time
+- Add and delete rows/columns
+- Watch the user list and cell highlights
+- Try typing formulas and see them update live
+- If you want to get fancy, try disconnecting/reconnecting or simulating slow network (DevTools > Network > Slow 3G)
 
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+---
