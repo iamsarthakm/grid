@@ -314,8 +314,15 @@ function Grid() {
             }
         };
 
-        return () => {
+        // Explicitly close the WebSocket on unmount or tab close
+        const cleanup = () => {
             if (socket.readyState === 1) socket.close();
+        };
+        window.addEventListener('beforeunload', cleanup);
+
+        return () => {
+            cleanup();
+            window.removeEventListener('beforeunload', cleanup);
         };
     }, []);
 
@@ -507,30 +514,36 @@ function Grid() {
                 maxWidth: '200px'
             }}>
                 <h4 style={{ margin: '0 0 10px 0' }}>Active Users</h4>
-                {Object.entries(otherUsers).map(([uid, user]) => (
-                    <div key={uid} style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        margin: '5px 0',
-                        fontWeight: uid === userId ? 'bold' : 'normal'
-                    }}>
-                        <div style={{
-                            width: '12px',
-                            height: '12px',
-                            borderRadius: '50%',
-                            backgroundColor: user.color,
-                            marginRight: '8px'
-                        }} />
-                        <span style={{
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis'
+                {Object.entries(otherUsers).map(([uid, user]) => {
+                    const isCurrentUser = uid === userId;
+                    let displayName = user.name || `User ${uid.slice(0, 4)}`;
+                    if (isCurrentUser && userName) {
+                        displayName = userName;
+                    }
+                    return (
+                        <div key={uid} style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            margin: '5px 0',
+                            fontWeight: isCurrentUser ? 'bold' : 'normal'
                         }}>
-                            {user.name || `User ${uid.slice(0, 4)}`}
-                            {uid === userId && ' (You)'}
-                        </span>
-                    </div>
-                ))}
+                            <div style={{
+                                width: '12px',
+                                height: '12px',
+                                borderRadius: '50%',
+                                backgroundColor: user.color,
+                                marginRight: '8px'
+                            }} />
+                            <span style={{
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis'
+                            }}>
+                                {displayName}{isCurrentUser && ' (You)'}
+                            </span>
+                        </div>
+                    );
+                })}
             </div>
 
             {/* <div style={{ marginBottom: '20px' }}>

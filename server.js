@@ -31,12 +31,14 @@ function ensureGridSize(minRows = 100, minCols = 26) {
 }
 
 function broadcastUserList() {
-  const userList = Object.values(clients).map(client => ({
-    userId: client.userId,
-    name: client.name || `User ${client.userId.slice(0, 4)}`,
-    position: client.position,
-    color: client.color
-  }));
+  const userList = Object.values(clients)
+    .filter(client => client.name) // Only users who have set their name
+    .map(client => ({
+      userId: client.userId,
+      name: client.name,
+      position: client.position,
+      color: client.color
+    }));
   
   broadcast({ 
     type: 'user-list', 
