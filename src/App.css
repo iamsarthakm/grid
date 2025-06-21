@@ -32,7 +32,23 @@
   from {
     transform: rotate(0deg);
   }
+
   to {
     transform: rotate(360deg);
   }
+}
+
+.grid-container {
+  padding: 20px;
+  margin: 40px auto 40px 40px;
+  /* top, right, bottom, left */
+  width: 85vw;
+  /* reduce overall width */
+  height: 85vh;
+  overflow: auto;
+  border: 2px solid #ccc;
+  border-radius: 8px;
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.1);
+  background-color: white;
+  box-sizing: border-box;
 }
