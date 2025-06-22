@@ -10,6 +10,8 @@ npm-debug.log
 **/__pycache__
 *.pyc
 
+**/lambdas/__pycache__/**
+
 # Ignore Python dependencies installed directly into the lambdas folder
 # These should be installed via `pip install -t` as per the README
 /lambdas/bin
