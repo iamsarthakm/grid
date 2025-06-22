@@ -1,0 +1,38 @@
+# Node.js
+# Ignore node_modules folders in the root, grid-fe, and web-socket-server
+**/node_modules
+/grid-fe/build
+npm-debug.log
+.npm
+
+# Python
+# Ignore Python caches and compiled files
+**/__pycache__
+*.pyc
+
+# Ignore Python dependencies installed directly into the lambdas folder
+# These should be installed via `pip install -t` as per the README
+/lambdas/bin
+/lambdas/certifi
+/lambdas/certifi-*.dist-info
+/lambdas/charset_normalizer
+/lambdas/charset_normalizer-*.dist-info
+/lambdas/idna
+/lambdas/idna-*.dist-info
+/lambdas/requests
+/lambdas/requests-*.dist-info
+/lambdas/urllib3
+/lambdas/urllib3-*.dist-info
+
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor-specific directories
+.vscode/
+.idea/ 

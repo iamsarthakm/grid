@@ -1,0 +1,59 @@
+version: '3.8'
+services:
+  dynamodb-local:
+    image: amazon/dynamodb-local
+    container_name: dynamodb-local
+    ports:
+      - "8000:8000"
+    volumes:
+      - dynamodb_data:/home/dynamodblocal
+    command: -jar DynamoDBLocal.jar -sharedDb -dbPath .
+
+  dynamodb-admin:
+    image: instructure/dynamo-local-admin
+    container_name: dynamodb-admin
+    ports:
+      - "8001:8001"
+    environment:
+      - DYNAMO_ENDPOINT=http://dynamodb-local:8000
+    depends_on:
+      - dynamodb-local
+
+  lambda-local:
+    image: lambci/lambda:python3.8
+    container_name: lambda-local
+    ports:
+      - "9001:9001"
+    volumes:
+      - ./lambdas:/var/task
+    environment:
+      - DOCKER_LAMBDA_STAY_OPEN=1  
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_REGION=us-east-1
+      - DB_ENDPOINT=http://dynamodb-local:8000
+    command: core.handler
+    depends_on:
+      - dynamodb-local
+
+  frontend:
+    build:
+      context: ./grid-fe
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    command: npm start
+    restart: unless-stopped
+    container_name: grid-frontend
+
+  web-socket-server:
+    build:
+      context: ./web-socket-server
+      dockerfile: Dockerfile.server
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    container_name: grid-backend
+
+volumes:
+  dynamodb_data:
