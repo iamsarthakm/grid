@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 // Constants
-const COLS = 26;
-const ROWS = 100;
-const colHeaders = Array.from({ length: COLS }, (_, i) => String.fromCharCode(65 + i));
+const DEFAULT_COLS = 26;
+const DEFAULT_ROWS = 100;
 const USER_COLORS = [
     '#FF5252', '#FF4081', '#E040FB', '#7C4DFF', '#536DFE',
     '#448AFF', '#40C4FF', '#18FFFF', '#64FFDA', '#69F0AE',
@@ -95,13 +94,28 @@ const evaluateFormula = (formula, getCellValue) => {
     }
 };
 
+// Helper function to generate column headers dynamically
+const generateColHeaders = (numCols) => {
+    return Array.from({ length: numCols }, (_, i) => {
+        let colLetter = '';
+        let colNum = i + 1;
+        while (colNum > 0) {
+            colNum--;
+            colLetter = String.fromCharCode(65 + (colNum % 26)) + colLetter;
+            colNum = Math.floor(colNum / 26);
+        }
+        return colLetter;
+    });
+};
+
 function Grid() {
     // State
     const [gridData, setGridData] = useState(
-        Array.from({ length: ROWS }, () =>
-            Array.from({ length: COLS }, () => ({ rawValue: '', computedValue: '' }))
+        Array.from({ length: DEFAULT_ROWS }, () =>
+            Array.from({ length: DEFAULT_COLS }, () => ({ rawValue: '', computedValue: '' }))
         )
     );
+    const [gridDimensions, setGridDimensions] = useState({ totalRows: DEFAULT_ROWS, totalCols: DEFAULT_COLS });
     const [selectedCell, setSelectedCell] = useState({ row: 0, col: 0 });
     const [editingCell, setEditingCell] = useState(null);
     const [ws, setWs] = useState(null);
@@ -120,6 +134,9 @@ function Grid() {
     // Refs
     const cellRefs = useRef({});
     const debounceTimers = useRef({});
+
+    // Generate column headers dynamically
+    const colHeaders = generateColHeaders(gridDimensions.totalCols);
 
     // Helper functions
     const getCellValue = (row, col) => {
@@ -167,10 +184,10 @@ function Grid() {
             const newGrid = [...prev];
             // Ensure the grid has enough rows and columns
             while (newGrid.length <= row) {
-                newGrid.push(Array.from({ length: COLS }, () => ({ rawValue: '', computedValue: '' })));
+                newGrid.push(Array.from({ length: gridDimensions.totalCols }, () => ({ rawValue: '', computedValue: '' })));
             }
             if (!newGrid[row]) {
-                newGrid[row] = Array.from({ length: COLS }, () => ({ rawValue: '', computedValue: '' }));
+                newGrid[row] = Array.from({ length: gridDimensions.totalCols }, () => ({ rawValue: '', computedValue: '' }));
             }
             while (newGrid[row].length <= col) {
                 newGrid[row].push({ rawValue: '', computedValue: '' });
@@ -200,10 +217,43 @@ function Grid() {
     };
 
     const handleRowAdded = (msg) => {
+        setGridData(prev => [...prev, Array.from({ length: gridDimensions.totalCols }, () => ({ rawValue: '', computedValue: '' }))]);
+    };
+
+    const handleGridDimensionsChanged = (msg) => {
+        const { newDimensions } = msg;
+        setGridDimensions(newDimensions);
+
+        // Update grid data to match new dimensions
         setGridData(prev => {
-            const newRow = Array.from({ length: msg.colCount }, () => ({ rawValue: '', computedValue: '' }));
-            return [...prev, newRow];
+            const newGrid = [...prev];
+
+            // Adjust rows
+            while (newGrid.length < newDimensions.totalRows) {
+                newGrid.push(Array.from({ length: newDimensions.totalCols }, () => ({ rawValue: '', computedValue: '' })));
+            }
+            if (newGrid.length > newDimensions.totalRows) {
+                newGrid.splice(newDimensions.totalRows);
+            }
+
+            // Adjust columns for each row
+            newGrid.forEach((row, rowIdx) => {
+                while (row.length < newDimensions.totalCols) {
+                    row.push({ rawValue: '', computedValue: '' });
+                }
+                if (row.length > newDimensions.totalCols) {
+                    row.splice(newDimensions.totalCols);
+                }
+            });
+
+            return newGrid;
         });
+
+        // Adjust selected cell if it's now out of bounds
+        setSelectedCell(prev => ({
+            row: Math.min(prev.row, newDimensions.totalRows - 1),
+            col: Math.min(prev.col, newDimensions.totalCols - 1)
+        }));
     };
 
     const handleSetName = () => {
@@ -374,15 +424,19 @@ function Grid() {
 
                     case 'full-grid':
                         if (msg.grid) {
-                            // Always create a full 100x26 grid first
-                            const newGrid = Array.from({ length: ROWS }, () =>
-                                Array.from({ length: COLS }, () => ({ rawValue: '', computedValue: '' }))
+                            // Get dimensions from the message or use defaults
+                            const dimensions = msg.dimensions || { totalRows: DEFAULT_ROWS, totalCols: DEFAULT_COLS };
+                            setGridDimensions(dimensions);
+
+                            // Create grid with the correct dimensions from the server
+                            const newGrid = Array.from({ length: dimensions.totalRows }, () =>
+                                Array.from({ length: dimensions.totalCols }, () => ({ rawValue: '', computedValue: '' }))
                             );
 
                             // Fill in the actual data from sparse grid
                             Object.keys(msg.grid).forEach(cellId => {
                                 const { row, col } = getCellPosFromId(cellId);
-                                if (row >= 0 && row < ROWS && col >= 0 && col < COLS) {
+                                if (row >= 0 && row < dimensions.totalRows && col >= 0 && col < dimensions.totalCols) {
                                     newGrid[row][col] = {
                                         rawValue: msg.grid[cellId].rawValue || '',
                                         computedValue: msg.grid[cellId].computedValue || ''
@@ -391,13 +445,27 @@ function Grid() {
                             });
 
                             setGridData(newGrid);
+                            console.log(`Loaded grid with dimensions: ${dimensions.totalRows}x${dimensions.totalCols} and ${Object.keys(msg.grid).length} populated cells`);
                         } else {
-                            // If no grid data, still create empty full grid
-                            const emptyGrid = Array.from({ length: ROWS }, () =>
-                                Array.from({ length: COLS }, () => ({ rawValue: '', computedValue: '' }))
+                            // If no grid data, still create empty full grid with default dimensions
+                            const dimensions = msg.dimensions || { totalRows: DEFAULT_ROWS, totalCols: DEFAULT_COLS };
+                            const emptyGrid = Array.from({ length: dimensions.totalRows }, () =>
+                                Array.from({ length: dimensions.totalCols }, () => ({ rawValue: '', computedValue: '' }))
                             );
                             setGridData(emptyGrid);
+                            setGridDimensions(dimensions);
+                            console.log(`Created empty grid with dimensions: ${dimensions.totalRows}x${dimensions.totalCols}`);
                         }
+                        break;
+
+                    case 'grid-dimensions-changed':
+                        handleGridDimensionsChanged(msg);
+                        break;
+
+                    case 'grid-dimension-error':
+                        console.error('Grid dimension error:', msg.error);
+                        // You could add a toast notification here to show the error to the user
+                        alert(`Grid operation failed: ${msg.error}`);
                         break;
 
                     default:
@@ -437,7 +505,7 @@ function Grid() {
                 let { row, col } = prev;
                 if (e.key === 'ArrowDown') row = Math.min(gridData.length - 1, row + 1);
                 if (e.key === 'ArrowUp') row = Math.max(0, row - 1);
-                if (e.key === 'ArrowRight') col = Math.min((gridData[0]?.length || COLS) - 1, col + 1);
+                if (e.key === 'ArrowRight') col = Math.min((gridData[0]?.length || DEFAULT_COLS) - 1, col + 1);
                 if (e.key === 'ArrowLeft') col = Math.max(0, col - 1);
                 return { row, col };
             });
@@ -681,34 +749,37 @@ function Grid() {
                 })}
             </div>
 
-            {/* <div style={{ marginBottom: '20px' }}>
+            <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ marginRight: '20px', fontSize: '14px', color: '#666' }}>
+                    Grid Size: {gridDimensions.totalRows} × {gridDimensions.totalCols}
+                </div>
                 <button
                     onClick={handleAddRow}
                     style={buttonStyle}
                 >
-                    Add Row
+                    ➕ Add Row
                 </button>
                 <button
                     onClick={handleDeleteRow}
                     style={buttonStyle}
-                    disabled={gridData.length <= 1}
+                    disabled={gridDimensions.totalRows <= 1}
                 >
-                    Delete Row
+                    ➖ Delete Row
                 </button>
                 <button
                     onClick={handleAddCol}
                     style={buttonStyle}
                 >
-                    Add Column
+                    ➕ Add Column
                 </button>
                 <button
                     onClick={handleDeleteCol}
                     style={buttonStyle}
-                    disabled={gridData[0]?.length <= 1}
+                    disabled={gridDimensions.totalCols <= 1}
                 >
-                    Delete Column
+                    ➖ Delete Column
                 </button>
-            </div> */}
+            </div>
 
             <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 150px)' }}>
                 <table style={{ borderCollapse: 'collapse', width: '100%' }}>

@@ -284,6 +284,14 @@ def handler(event, context):
             return list_grids(event)
         elif op == "create_grid":
             return create_grid(event)
+        elif op == "add_row":
+            return add_row(event)
+        elif op == "delete_row":
+            return delete_row(event)
+        elif op == "add_column":
+            return add_column(event)
+        elif op == "delete_column":
+            return delete_column(event)
         else:
             return {
                 "statusCode": 400,
@@ -471,22 +479,360 @@ def get_grid_data(event):
             "body": json.dumps({"error": "Missing gridFileId"}, cls=DecimalEncoder),
         }
 
-    logger.info(f"DB HIT: Querying database for grid '{gridFileId}'")
-    resp = values_table.query(KeyConditionExpression=Key("gridFileId").eq(gridFileId))
-    items = resp.get("Items", [])
-    logger.info(f"DB QUERY Complete: Found {len(items)} items for grid '{gridFileId}'")
+    try:
+        # Get grid metadata to get current dimensions
+        grid_resp = grid_table.get_item(Key={"id": gridFileId})
+        if "Item" not in grid_resp:
+            return {
+                "statusCode": 404,
+                "body": json.dumps({"error": "Grid not found"}, cls=DecimalEncoder),
+            }
 
-    gridData = {}
-    for item in items:
-        gridData[item["cellCoordinate"]] = {
-            "rawValue": item.get("rawValue", ""),
-            "computedValue": item.get("value", ""),
+        current_dimensions = grid_resp["Item"].get(
+            "dimensions", {"totalRows": 100, "totalCols": 26}
+        )
+        # Convert Decimal to int for consistency
+        current_dimensions = {
+            "totalRows": int(current_dimensions["totalRows"]),
+            "totalCols": int(current_dimensions["totalCols"]),
+        }
+        logger.info(f"Grid dimensions: {current_dimensions}")
+
+        logger.info(f"DB HIT: Querying database for grid '{gridFileId}'")
+        resp = values_table.query(
+            KeyConditionExpression=Key("gridFileId").eq(gridFileId)
+        )
+        items = resp.get("Items", [])
+        logger.info(
+            f"DB QUERY Complete: Found {len(items)} items for grid '{gridFileId}'"
+        )
+
+        gridData = {}
+        for item in items:
+            gridData[item["cellCoordinate"]] = {
+                "rawValue": item.get("rawValue", ""),
+                "computedValue": item.get("value", ""),
+            }
+
+        logger.info(
+            f"Returning {len(gridData)} cells for grid '{gridFileId}' with dimensions {current_dimensions}"
+        )
+        return {
+            "statusCode": 200,
+            "body": json.dumps(
+                {
+                    "gridFileId": gridFileId,
+                    "gridData": gridData,
+                    "dimensions": current_dimensions,
+                },
+                cls=DecimalEncoder,
+            ),
+        }
+    except Exception as e:
+        logger.error(f"Error getting grid data: {e}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": str(e)}, cls=DecimalEncoder),
         }
 
-    logger.info(f"Returning {len(gridData)} cells for grid '{gridFileId}'")
-    return {
-        "statusCode": 200,
-        "body": json.dumps(
-            {"gridFileId": gridFileId, "gridData": gridData}, cls=DecimalEncoder
-        ),
-    }
+
+def add_row(event):
+    """Add a row to the grid"""
+    gridFileId = event.get("gridFileId")
+    logger.info(f"Adding row to grid '{gridFileId}'")
+
+    if not gridFileId:
+        return {
+            "statusCode": 400,
+            "body": json.dumps({"error": "Missing gridFileId"}, cls=DecimalEncoder),
+        }
+
+    try:
+        # Get current grid dimensions
+        grid_resp = grid_table.get_item(Key={"id": gridFileId})
+        if "Item" not in grid_resp:
+            return {
+                "statusCode": 404,
+                "body": json.dumps({"error": "Grid not found"}, cls=DecimalEncoder),
+            }
+
+        current_dimensions = grid_resp["Item"].get(
+            "dimensions", {"totalRows": 100, "totalCols": 26}
+        )
+        # Convert Decimal to int for calculations
+        current_rows = int(current_dimensions["totalRows"])
+        current_cols = int(current_dimensions["totalCols"])
+        new_rows = current_rows + 1
+        new_cols = current_cols
+
+        # Update grid dimensions
+        grid_table.update_item(
+            Key={"id": gridFileId},
+            UpdateExpression="SET dimensions.totalRows = :rows, updatedAt = :now",
+            ExpressionAttributeValues={
+                ":rows": new_rows,
+                ":now": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+        logger.info(
+            f"Added row to grid '{gridFileId}'. New dimensions: {new_rows}x{new_cols}"
+        )
+        return {
+            "statusCode": 200,
+            "body": json.dumps(
+                {
+                    "gridFileId": gridFileId,
+                    "newDimensions": {"totalRows": new_rows, "totalCols": new_cols},
+                    "operation": "add_row",
+                },
+                cls=DecimalEncoder,
+            ),
+        }
+    except Exception as e:
+        logger.error(f"Error adding row: {e}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": str(e)}, cls=DecimalEncoder),
+        }
+
+
+def delete_row(event):
+    """Delete the last row from the grid"""
+    gridFileId = event.get("gridFileId")
+    logger.info(f"Deleting row from grid '{gridFileId}'")
+
+    if not gridFileId:
+        return {
+            "statusCode": 400,
+            "body": json.dumps({"error": "Missing gridFileId"}, cls=DecimalEncoder),
+        }
+
+    try:
+        # Get current grid dimensions
+        grid_resp = grid_table.get_item(Key={"id": gridFileId})
+        if "Item" not in grid_resp:
+            return {
+                "statusCode": 404,
+                "body": json.dumps({"error": "Grid not found"}, cls=DecimalEncoder),
+            }
+
+        current_dimensions = grid_resp["Item"].get(
+            "dimensions", {"totalRows": 100, "totalCols": 26}
+        )
+        # Convert Decimal to int for calculations
+        current_rows = int(current_dimensions["totalRows"])
+        current_cols = int(current_dimensions["totalCols"])
+
+        # Prevent deletion if only 1 row remains
+        if current_rows <= 1:
+            return {
+                "statusCode": 400,
+                "body": json.dumps(
+                    {"error": "Cannot delete row. Minimum 1 row required."},
+                    cls=DecimalEncoder,
+                ),
+            }
+
+        new_rows = current_rows - 1
+        new_cols = current_cols
+
+        # Update grid dimensions
+        grid_table.update_item(
+            Key={"id": gridFileId},
+            UpdateExpression="SET dimensions.totalRows = :rows, updatedAt = :now",
+            ExpressionAttributeValues={
+                ":rows": new_rows,
+                ":now": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+        # Delete cells in the last row only
+        last_row = current_rows
+        for col in range(1, new_cols + 1):
+            col_letter = ""
+            temp_col = col
+            while temp_col > 0:
+                temp_col, remainder = divmod(temp_col - 1, 26)
+                col_letter = chr(65 + remainder) + col_letter
+
+            cell_coordinate = f"{col_letter}{last_row}"
+            try:
+                values_table.delete_item(
+                    Key={"gridFileId": gridFileId, "cellCoordinate": cell_coordinate}
+                )
+                logger.info(f"Deleted cell {cell_coordinate}")
+            except Exception as e:
+                logger.warning(f"Could not delete cell {cell_coordinate}: {e}")
+
+        logger.info(
+            f"Deleted row from grid '{gridFileId}'. New dimensions: {new_rows}x{new_cols}"
+        )
+        return {
+            "statusCode": 200,
+            "body": json.dumps(
+                {
+                    "gridFileId": gridFileId,
+                    "newDimensions": {"totalRows": new_rows, "totalCols": new_cols},
+                    "operation": "delete_row",
+                },
+                cls=DecimalEncoder,
+            ),
+        }
+    except Exception as e:
+        logger.error(f"Error deleting row: {e}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": str(e)}, cls=DecimalEncoder),
+        }
+
+
+def add_column(event):
+    """Add a column to the grid"""
+    gridFileId = event.get("gridFileId")
+    logger.info(f"Adding column to grid '{gridFileId}'")
+
+    if not gridFileId:
+        return {
+            "statusCode": 400,
+            "body": json.dumps({"error": "Missing gridFileId"}, cls=DecimalEncoder),
+        }
+
+    try:
+        # Get current grid dimensions
+        grid_resp = grid_table.get_item(Key={"id": gridFileId})
+        if "Item" not in grid_resp:
+            return {
+                "statusCode": 404,
+                "body": json.dumps({"error": "Grid not found"}, cls=DecimalEncoder),
+            }
+
+        current_dimensions = grid_resp["Item"].get(
+            "dimensions", {"totalRows": 100, "totalCols": 26}
+        )
+        # Convert Decimal to int for calculations
+        current_rows = int(current_dimensions["totalRows"])
+        current_cols = int(current_dimensions["totalCols"])
+        new_rows = current_rows
+        new_cols = current_cols + 1
+
+        # Update grid dimensions
+        grid_table.update_item(
+            Key={"id": gridFileId},
+            UpdateExpression="SET dimensions.totalCols = :cols, updatedAt = :now",
+            ExpressionAttributeValues={
+                ":cols": new_cols,
+                ":now": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+        logger.info(
+            f"Added column to grid '{gridFileId}'. New dimensions: {new_rows}x{new_cols}"
+        )
+        return {
+            "statusCode": 200,
+            "body": json.dumps(
+                {
+                    "gridFileId": gridFileId,
+                    "newDimensions": {"totalRows": new_rows, "totalCols": new_cols},
+                    "operation": "add_column",
+                },
+                cls=DecimalEncoder,
+            ),
+        }
+    except Exception as e:
+        logger.error(f"Error adding column: {e}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": str(e)}, cls=DecimalEncoder),
+        }
+
+
+def delete_column(event):
+    """Delete the last column from the grid"""
+    gridFileId = event.get("gridFileId")
+    logger.info(f"Deleting column from grid '{gridFileId}'")
+
+    if not gridFileId:
+        return {
+            "statusCode": 400,
+            "body": json.dumps({"error": "Missing gridFileId"}, cls=DecimalEncoder),
+        }
+
+    try:
+        # Get current grid dimensions
+        grid_resp = grid_table.get_item(Key={"id": gridFileId})
+        if "Item" not in grid_resp:
+            return {
+                "statusCode": 404,
+                "body": json.dumps({"error": "Grid not found"}, cls=DecimalEncoder),
+            }
+
+        current_dimensions = grid_resp["Item"].get(
+            "dimensions", {"totalRows": 100, "totalCols": 26}
+        )
+        # Convert Decimal to int for calculations
+        current_rows = int(current_dimensions["totalRows"])
+        current_cols = int(current_dimensions["totalCols"])
+
+        # Prevent deletion if only 1 column remains
+        if current_cols <= 1:
+            return {
+                "statusCode": 400,
+                "body": json.dumps(
+                    {"error": "Cannot delete column. Minimum 1 column required."},
+                    cls=DecimalEncoder,
+                ),
+            }
+
+        new_rows = current_rows
+        new_cols = current_cols - 1
+
+        # Update grid dimensions
+        grid_table.update_item(
+            Key={"id": gridFileId},
+            UpdateExpression="SET dimensions.totalCols = :cols, updatedAt = :now",
+            ExpressionAttributeValues={
+                ":cols": new_cols,
+                ":now": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+        # Delete cells in the last column only
+        last_col = current_cols
+        col_letter = ""
+        temp_col = last_col
+        while temp_col > 0:
+            temp_col, remainder = divmod(temp_col - 1, 26)
+            col_letter = chr(65 + remainder) + col_letter
+
+        for row in range(1, new_rows + 1):
+            cell_coordinate = f"{col_letter}{row}"
+            try:
+                values_table.delete_item(
+                    Key={"gridFileId": gridFileId, "cellCoordinate": cell_coordinate}
+                )
+                logger.info(f"Deleted cell {cell_coordinate}")
+            except Exception as e:
+                logger.warning(f"Could not delete cell {cell_coordinate}: {e}")
+
+        logger.info(
+            f"Deleted column from grid '{gridFileId}'. New dimensions: {new_rows}x{new_cols}"
+        )
+        return {
+            "statusCode": 200,
+            "body": json.dumps(
+                {
+                    "gridFileId": gridFileId,
+                    "newDimensions": {"totalRows": new_rows, "totalCols": new_cols},
+                    "operation": "delete_column",
+                },
+                cls=DecimalEncoder,
+            ),
+        }
+    except Exception as e:
+        logger.error(f"Error deleting column: {e}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": str(e)}, cls=DecimalEncoder),
+        }

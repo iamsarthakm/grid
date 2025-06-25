@@ -66,6 +66,46 @@ async function lam_create_grid(name) {
   return response.data;
 }
 
+// Add row via Lambda
+async function lam_add_row(gridFileId) {
+  const payload = {
+    operation: 'add_row',
+    gridFileId
+  };
+  const response = await axios.post(LAMBDA_ENDPOINT, payload);
+  return response.data;
+}
+
+// Delete row via Lambda
+async function lam_delete_row(gridFileId) {
+  const payload = {
+    operation: 'delete_row',
+    gridFileId
+  };
+  const response = await axios.post(LAMBDA_ENDPOINT, payload);
+  return response.data;
+}
+
+// Add column via Lambda
+async function lam_add_column(gridFileId) {
+  const payload = {
+    operation: 'add_column',
+    gridFileId
+  };
+  const response = await axios.post(LAMBDA_ENDPOINT, payload);
+  return response.data;
+}
+
+// Delete column via Lambda
+async function lam_delete_column(gridFileId) {
+  const payload = {
+    operation: 'delete_column',
+    gridFileId
+  };
+  const response = await axios.post(LAMBDA_ENDPOINT, payload);
+  return response.data;
+}
+
 function broadcastUserList() {
   const userList = Object.values(clients)
     .filter(client => client.name) // Only users who have set their name
@@ -155,11 +195,13 @@ async function handleMessage(senderId, message, ws) {
           const gridDataResp = await lam_get_grid_data(firstGrid.id);
           const gridDataBody = gridDataResp.body ? JSON.parse(gridDataResp.body) : gridDataResp;
           const gridData = convertGridDataToRowCol(gridDataBody.gridData || {});
+          const dimensions = gridDataBody.dimensions || { totalRows: 100, totalCols: 26 };
 
           ws.send(JSON.stringify({
             type: 'full-grid',
             grid: gridData,
             gridId: firstGrid.id,
+            dimensions: dimensions,
             timestamp: Date.now()
           }));
         } else {
@@ -175,6 +217,7 @@ async function handleMessage(senderId, message, ws) {
             type: 'full-grid',
             grid: {},
             gridId: createBody.gridId,
+            dimensions: { totalRows: 100, totalCols: 26 },
             timestamp: Date.now()
           }));
         }
@@ -194,6 +237,7 @@ async function handleMessage(senderId, message, ws) {
             type: 'full-grid',
             grid: {},
             gridId: createBody.gridId,
+            dimensions: { totalRows: 100, totalCols: 26 },
             timestamp: Date.now()
           }));
         } catch (createErr) {
@@ -279,10 +323,12 @@ async function handleMessage(senderId, message, ws) {
         const lambdaResp = await lam_get_grid_data(message.gridId);
         const body = lambdaResp.body ? JSON.parse(lambdaResp.body) : lambdaResp;
         const gridData = convertGridDataToRowCol(body.gridData || {});
+        const dimensions = body.dimensions || { totalRows: 100, totalCols: 26 };
         ws.send(JSON.stringify({
           type: 'full-grid',
           grid: gridData,
           gridId: message.gridId,
+          dimensions: dimensions,
           timestamp: Date.now()
         }));
       } catch (err) {
@@ -383,9 +429,82 @@ async function handleMessage(senderId, message, ws) {
     case 'add-row':
     case 'delete-row':
     case 'add-col':
-    case 'delete-col':
-      // Not implemented in Lambda yet
+    case 'delete-col': {
+      const selectedGridId = clients[senderId].selectedGridId;
+
+      if (!selectedGridId) {
+        ws.send(JSON.stringify({
+          type: 'grid-dimension-error',
+          error: 'No grid selected',
+          timestamp: Date.now()
+        }));
+        return;
+      }
+
+      // Skip Lambda call if using a fake grid ID
+      if (selectedGridId.startsWith('fallback-grid-')) {
+        ws.send(JSON.stringify({
+          type: 'grid-dimension-error',
+          error: 'Cannot modify fallback grid',
+          timestamp: Date.now()
+        }));
+        return;
+      }
+
+      try {
+        let lambdaResp;
+        let operation;
+
+        switch (message.type) {
+          case 'add-row':
+            lambdaResp = await lam_add_row(selectedGridId);
+            operation = 'add_row';
+            break;
+          case 'delete-row':
+            lambdaResp = await lam_delete_row(selectedGridId);
+            operation = 'delete_row';
+            break;
+          case 'add-col':
+            lambdaResp = await lam_add_column(selectedGridId);
+            operation = 'add_column';
+            break;
+          case 'delete-col':
+            lambdaResp = await lam_delete_column(selectedGridId);
+            operation = 'delete_column';
+            break;
+        }
+
+        const body = lambdaResp.body ? JSON.parse(lambdaResp.body) : lambdaResp;
+
+        if (body.error) {
+          ws.send(JSON.stringify({
+            type: 'grid-dimension-error',
+            error: body.error,
+            timestamp: Date.now()
+          }));
+          return;
+        }
+
+        // Broadcast the dimension change to all clients
+        broadcast({
+          type: 'grid-dimensions-changed',
+          gridId: selectedGridId,
+          newDimensions: body.newDimensions,
+          operation: operation,
+          timestamp: Date.now()
+        });
+
+        console.log(`Grid dimensions updated: ${operation} for grid ${selectedGridId}`);
+      } catch (err) {
+        console.error(`Lambda ${message.type} error:`, err);
+        ws.send(JSON.stringify({
+          type: 'grid-dimension-error',
+          error: `Failed to ${message.type.replace('-', ' ')}`,
+          timestamp: Date.now()
+        }));
+      }
       break;
+    }
 
     default:
       console.warn(`Unhandled message type: ${message.type}`, message);
