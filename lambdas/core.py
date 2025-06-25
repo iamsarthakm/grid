@@ -502,21 +502,21 @@ def get_grid_data(event):
         }
         logger.info(f"Grid dimensions: {current_dimensions}")
 
-        logger.info(f"DB HIT: Querying database for grid '{gridFileId}'")
+    logger.info(f"DB HIT: Querying database for grid '{gridFileId}'")
         resp = values_table.query(
             KeyConditionExpression=Key("gridFileId").eq(gridFileId)
         )
-        items = resp.get("Items", [])
+    items = resp.get("Items", [])
         logger.info(
             f"DB QUERY Complete: Found {len(items)} items for grid '{gridFileId}'"
         )
 
-        gridData = {}
-        for item in items:
-            gridData[item["cellCoordinate"]] = {
-                "rawValue": item.get("rawValue", ""),
-                "computedValue": item.get("value", ""),
-            }
+    gridData = {}
+    for item in items:
+        gridData[item["cellCoordinate"]] = {
+            "rawValue": item.get("rawValue", ""),
+            "computedValue": item.get("value", ""),
+        }
 
         logger.info(
             f"Returning {len(gridData)} cells for grid '{gridFileId}' with dimensions {current_dimensions}"
@@ -1169,8 +1169,8 @@ def sort_row(event):
 
         logger.info(f"Sorted row {target_row}. Moved {len(new_cells)} cells.")
 
-        return {
-            "statusCode": 200,
+    return {
+        "statusCode": 200,
             "body": json.dumps(
                 {
                     "gridFileId": gridFileId,
@@ -1189,4 +1189,4 @@ def sort_row(event):
         return {
             "statusCode": 500,
             "body": json.dumps({"error": str(e)}, cls=DecimalEncoder),
-        }
+    }
