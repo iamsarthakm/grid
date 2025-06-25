@@ -17,6 +17,19 @@ const getCellPosFromId = (cellId) => {
     return { row, col };
 };
 
+const getCellIdFromCoordinate = (cellCoordinate) => {
+    const match = cellCoordinate.match(/^([A-Z]+)(\d+)$/);
+    if (!match) return null;
+
+    let col = 0;
+    for (let i = 0; i < match[1].length; i++) {
+        col = col * 26 + (match[1].charCodeAt(i) - 65 + 1);
+    }
+    col -= 1;
+    const row = parseInt(match[2], 10) - 1;
+    return `${row}-${col}`;
+};
+
 const isValidDate = (str) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return false;
     const [year, month, day] = str.split('-').map(Number);
@@ -130,6 +143,9 @@ function Grid() {
     const [grids, setGrids] = useState([]);
     const [selectedGridId, setSelectedGridId] = useState('');
     const [showGridDropdown, setShowGridDropdown] = useState(false);
+
+    // Cell locking state
+    const [lockedCells, setLockedCells] = useState({}); // { cellId: { userId, userName } }
 
     // Refs
     const cellRefs = useRef({});
@@ -376,6 +392,26 @@ function Grid() {
         }
     };
 
+    const handleCellFocus = (row, col) => {
+        if (ws?.readyState === 1 && selectedGridId) {
+            const cellCoordinate = `${colHeaders[col]}${row + 1}`;
+            ws.send(JSON.stringify({
+                type: 'lock-cell',
+                cellCoordinate
+            }));
+        }
+    };
+
+    const handleCellBlur = (row, col) => {
+        if (ws?.readyState === 1 && selectedGridId) {
+            const cellCoordinate = `${colHeaders[col]}${row + 1}`;
+            ws.send(JSON.stringify({
+                type: 'unlock-cell',
+                cellCoordinate
+            }));
+        }
+    };
+
     // WebSocket connection
     useEffect(() => {
         const socket = new WebSocket('ws://localhost:8080');
@@ -489,6 +525,26 @@ function Grid() {
                         alert(`Grid operation failed: ${msg.error}`);
                         break;
 
+                    case 'cell-lock-update':
+                        if (msg.operation === 'lock_cell') {
+                            const cellId = getCellIdFromCoordinate(msg.cellCoordinate);
+                            setLockedCells(prev => ({
+                                ...prev,
+                                [cellId]: {
+                                    userId: msg.userId,
+                                    userName: msg.userName
+                                }
+                            }));
+                        } else if (msg.operation === 'unlock_cell') {
+                            const cellId = getCellIdFromCoordinate(msg.cellCoordinate);
+                            setLockedCells(prev => {
+                                const newState = { ...prev };
+                                delete newState[cellId];
+                                return newState;
+                            });
+                        }
+                        break;
+
                     default:
                         console.warn(`Unhandled message type: ${msg.type}`);
                 }
@@ -553,6 +609,11 @@ function Grid() {
         const isEditing = editingCell?.row === rowIdx && editingCell?.col === colIdx;
         const cell = gridData[rowIdx]?.[colIdx] || { rawValue: '', computedValue: '' };
 
+        // Check if cell is locked
+        const cellLock = lockedCells[cellKey];
+        const isLocked = cellLock && cellLock.userId !== userId;
+        const isLockedByMe = cellLock && cellLock.userId === userId;
+
         // Show rawValue when editing, computedValue when not editing
         const cellValue = isEditing ? cell.rawValue : cell.computedValue;
 
@@ -570,28 +631,39 @@ function Grid() {
         return (
             <td
                 key={colIdx}
+                className={`cell ${isSelected ? 'selected' : ''} ${isEditing ? 'editing' : ''} ${wasRecentlyUpdated ? 'recently-updated' : ''} ${isLocked ? 'locked' : ''} ${isLockedByMe ? 'locked-by-me' : ''}`}
+                onClick={() => {
+                    if (!isLocked) {
+                        setSelectedCell({ row: rowIdx, col: colIdx });
+                        setEditingCell({ row: rowIdx, col: colIdx });
+                        handleCellFocus(rowIdx, colIdx);
+                    }
+                }}
+                onBlur={() => {
+                    setEditingCell(null);
+                    handleCellBlur(rowIdx, colIdx);
+                }}
                 style={{
                     position: 'relative',
-                    backgroundColor: wasRecentlyUpdated ? '#fffde7' : undefined,
-                    transition: wasRecentlyUpdated ? 'background-color 1s ease-out' : undefined
+                    backgroundColor: isLocked ? '#f0f0f0' : isLockedByMe ? '#e8f5e8' : wasRecentlyUpdated ? '#fffde7' : 'white',
+                    transition: wasRecentlyUpdated ? 'background-color 1s ease-out' : undefined,
+                    border: usersHere.length > 0 ? `2px solid ${userColors[usersHere[0][0]]}` : '1px solid #ddd',
+                    cursor: isLocked ? 'not-allowed' : 'text'
                 }}
             >
                 <input
                     ref={el => (cellRefs.current[cellKey] = el)}
                     value={cellValue}
                     onChange={(e) => handleCellEdit(rowIdx, colIdx, e.target.value)}
-                    onFocus={() => {
-                        setSelectedCell({ row: rowIdx, col: colIdx });
-                        setEditingCell({ row: rowIdx, col: colIdx });
-                    }}
-                    onBlur={() => setEditingCell(null)}
+                    disabled={isLocked}
                     style={{
                         width: '100%',
                         boxSizing: 'border-box',
-                        backgroundColor: isSelected ? '#e3f2fd' : 'white',
-                        border: usersHere.length > 0 ? `2px solid ${userColors[usersHere[0][0]]}` : '1px solid #ddd',
+                        backgroundColor: 'transparent',
+                        border: 'none',
                         padding: '8px',
-                        fontSize: '14px'
+                        fontSize: '14px',
+                        cursor: isLocked ? 'not-allowed' : 'text'
                     }}
                 />
 
@@ -627,6 +699,37 @@ function Grid() {
                         }}
                     >
                         {updatedBy ? `Updated by ${updatedBy}` : 'Updated'}
+                    </div>
+                )}
+
+                {isLocked && (
+                    <div style={{
+                        position: 'absolute',
+                        top: '2px',
+                        right: '2px',
+                        fontSize: '10px',
+                        color: '#666',
+                        backgroundColor: '#fff',
+                        padding: '1px 3px',
+                        borderRadius: '2px',
+                        border: '1px solid #ddd'
+                    }}>
+                        🔒 {cellLock.userName}
+                    </div>
+                )}
+                {isLockedByMe && (
+                    <div style={{
+                        position: 'absolute',
+                        top: '2px',
+                        right: '2px',
+                        fontSize: '10px',
+                        color: '#4caf50',
+                        backgroundColor: '#fff',
+                        padding: '1px 3px',
+                        borderRadius: '2px',
+                        border: '1px solid #4caf50'
+                    }}>
+                        🔒 You
                     </div>
                 )}
             </td>

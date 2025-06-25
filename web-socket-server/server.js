@@ -7,6 +7,9 @@ const wss = new WebSocket.Server({ port: 8080 });
 // Remove in-memory grid storage - data comes from Lambda/DynamoDB
 const clients = {}; // { connectionId: { ws, userId, position, name, selectedGridId } }
 
+// In-memory cell locks - { gridId: { cellCoordinate: { userId, userName, lockedAt } } }
+const cellLocks = {};
+
 console.log('WebSocket server running on ws://localhost:8080');
 
 // Lambda-backed functions
@@ -130,6 +133,97 @@ async function lam_sort_row(gridFileId, rowIndex, direction) {
   return response.data;
 }
 
+// Get cell locks via Lambda
+async function lam_get_cell_locks(gridFileId) {
+  const payload = {
+    operation: 'get_cell_locks',
+    gridFileId
+  };
+  const response = await axios.post(LAMBDA_ENDPOINT, payload);
+  return response.data;
+}
+
+// Lock cell via Lambda
+async function lam_lock_cell(gridFileId, cellCoordinate, userId, userName) {
+  const payload = {
+    operation: 'lock_cell',
+    gridFileId,
+    cellCoordinate,
+    userId,
+    userName
+  };
+  const response = await axios.post(LAMBDA_ENDPOINT, payload);
+  return response.data;
+}
+
+// Unlock cell via Lambda
+async function lam_unlock_cell(gridFileId, cellCoordinate, userId) {
+  const payload = {
+    operation: 'unlock_cell',
+    gridFileId,
+    cellCoordinate,
+    userId
+  };
+  const response = await axios.post(LAMBDA_ENDPOINT, payload);
+  return response.data;
+}
+
+// Helper function to lock a cell in memory
+function lockCell(gridId, cellCoordinate, userId, userName) {
+  if (!cellLocks[gridId]) {
+    cellLocks[gridId] = {};
+  }
+
+  // Check if cell is already locked by another user
+  const existingLock = cellLocks[gridId][cellCoordinate];
+  if (existingLock && existingLock.userId !== userId) {
+    return {
+      success: false,
+      error: `Cell is already locked by user ${existingLock.userName}`,
+      lockedBy: existingLock.userId
+    };
+  }
+
+  // Lock the cell
+  cellLocks[gridId][cellCoordinate] = {
+    userId,
+    userName,
+    lockedAt: new Date().toISOString()
+  };
+
+  return { success: true };
+}
+
+// Helper function to unlock a cell in memory
+function unlockCell(gridId, cellCoordinate, userId) {
+  if (!cellLocks[gridId] || !cellLocks[gridId][cellCoordinate]) {
+    return { success: true, message: "Cell was not locked" };
+  }
+
+  const lock = cellLocks[gridId][cellCoordinate];
+  if (lock.userId !== userId) {
+    return {
+      success: false,
+      error: `Cell is locked by user ${lock.userName}, cannot unlock`
+    };
+  }
+
+  // Unlock the cell
+  delete cellLocks[gridId][cellCoordinate];
+
+  // Clean up empty grid locks
+  if (Object.keys(cellLocks[gridId]).length === 0) {
+    delete cellLocks[gridId];
+  }
+
+  return { success: true };
+}
+
+// Helper function to get all cell locks for a grid
+function getCellLocks(gridId) {
+  return cellLocks[gridId] || {};
+}
+
 function broadcastUserList() {
   const userList = Object.values(clients)
     .filter(client => client.name) // Only users who have set their name
@@ -180,6 +274,37 @@ wss.on('connection', async (ws) => {
   });
 
   ws.on('close', () => {
+    // Clean up any cell locks held by this user
+    const user = clients[connectionId];
+    if (user && user.selectedGridId) {
+      const gridLocks = cellLocks[user.selectedGridId];
+      if (gridLocks) {
+        const locksToRemove = [];
+        for (const [cellCoordinate, lock] of Object.entries(gridLocks)) {
+          if (lock.userId === connectionId) {
+            locksToRemove.push(cellCoordinate);
+          }
+        }
+        // Remove the locks and broadcast to other users
+        locksToRemove.forEach(cellCoordinate => {
+          delete gridLocks[cellCoordinate];
+          broadcast({
+            type: 'cell-lock-update',
+            gridId: user.selectedGridId,
+            cellCoordinate: cellCoordinate,
+            userId: connectionId,
+            userName: user.name,
+            operation: 'unlock_cell',
+            timestamp: Date.now()
+          });
+        });
+        // Clean up empty grid locks
+        if (Object.keys(gridLocks).length === 0) {
+          delete cellLocks[user.selectedGridId];
+        }
+      }
+    }
+
     delete clients[connectionId];
     broadcast({
       type: 'user-leave',
@@ -455,7 +580,9 @@ async function handleMessage(senderId, message, ws) {
     case 'add-col':
     case 'delete-col':
     case 'sort-column':
-    case 'sort-row': {
+    case 'sort-row':
+    case 'lock-cell':
+    case 'unlock-cell': {
       const selectedGridId = clients[senderId].selectedGridId;
 
       if (!selectedGridId) {
@@ -506,6 +633,52 @@ async function handleMessage(senderId, message, ws) {
             lambdaResp = await lam_sort_row(selectedGridId, message.rowIndex, message.direction);
             operation = 'sort_row';
             break;
+          case 'lock-cell':
+            // Use in-memory locking instead of Lambda
+            const lockResult = lockCell(selectedGridId, message.cellCoordinate, senderId, clients[senderId].name);
+            if (!lockResult.success) {
+              ws.send(JSON.stringify({
+                type: 'grid-operation-error',
+                error: lockResult.error,
+                timestamp: Date.now()
+              }));
+              return;
+            }
+            // Broadcast lock to all clients
+            broadcast({
+              type: 'cell-lock-update',
+              gridId: selectedGridId,
+              cellCoordinate: message.cellCoordinate,
+              userId: senderId,
+              userName: clients[senderId].name,
+              operation: 'lock_cell',
+              timestamp: Date.now()
+            });
+            console.log(`Cell locked: ${message.cellCoordinate} by ${clients[senderId].name}`);
+            return;
+          case 'unlock-cell':
+            // Use in-memory unlocking instead of Lambda
+            const unlockResult = unlockCell(selectedGridId, message.cellCoordinate, senderId);
+            if (!unlockResult.success) {
+              ws.send(JSON.stringify({
+                type: 'grid-operation-error',
+                error: unlockResult.error,
+                timestamp: Date.now()
+              }));
+              return;
+            }
+            // Broadcast unlock to all clients
+            broadcast({
+              type: 'cell-lock-update',
+              gridId: selectedGridId,
+              cellCoordinate: message.cellCoordinate,
+              userId: senderId,
+              userName: clients[senderId].name,
+              operation: 'unlock_cell',
+              timestamp: Date.now()
+            });
+            console.log(`Cell unlocked: ${message.cellCoordinate} by ${clients[senderId].name}`);
+            return;
         }
 
         const body = lambdaResp.body ? JSON.parse(lambdaResp.body) : lambdaResp;
@@ -519,8 +692,20 @@ async function handleMessage(senderId, message, ws) {
           return;
         }
 
+        // For cell locking operations, broadcast to all clients
+        if (operation === 'lock_cell' || operation === 'unlock_cell') {
+          broadcast({
+            type: 'cell-lock-update',
+            gridId: selectedGridId,
+            cellCoordinate: message.cellCoordinate,
+            userId: senderId,
+            userName: clients[senderId].name,
+            operation: operation,
+            timestamp: Date.now()
+          });
+        }
         // For sorting operations, we need to reload the grid data
-        if (operation === 'sort_column' || operation === 'sort_row') {
+        else if (operation === 'sort_column' || operation === 'sort_row') {
           // Reload grid data after sorting
           const gridDataResp = await lam_get_grid_data(selectedGridId);
           const gridDataBody = gridDataResp.body ? JSON.parse(gridDataResp.body) : gridDataResp;

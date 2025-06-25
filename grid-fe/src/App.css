@@ -52,3 +52,21 @@
   background-color: white;
   box-sizing: border-box;
 }
+
+.cell.locked {
+  background-color: #f0f0f0 !important;
+  cursor: not-allowed !important;
+}
+
+.cell.locked input {
+  cursor: not-allowed !important;
+  color: #666 !important;
+}
+
+.cell.locked-by-me {
+  background-color: #e8f5e8 !important;
+}
+
+.cell.locked-by-me input {
+  color: #2e7d32 !important;
+}
