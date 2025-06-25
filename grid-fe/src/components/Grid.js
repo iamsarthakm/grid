@@ -809,11 +809,8 @@ function Grid() {
                             onClick={handleJoinSpreadsheet}
                             disabled={!selectedGridId || selectedGridId === 'create-new'}
                             style={{
+                                ...buttonStyle,
                                 backgroundColor: selectedGridId && selectedGridId !== 'create-new' ? '#4CAF50' : '#ccc',
-                                color: 'white',
-                                border: 'none',
-                                padding: '10px 15px',
-                                borderRadius: '4px',
                                 cursor: selectedGridId && selectedGridId !== 'create-new' ? 'pointer' : 'not-allowed',
                                 fontSize: '16px',
                                 width: '100%'
@@ -885,7 +882,7 @@ function Grid() {
                 </button>
                 <button
                     onClick={handleDeleteRow}
-                    style={buttonStyle}
+                    style={gridDimensions.totalRows <= 1 ? buttonStyleDisabled : buttonStyle}
                     disabled={gridDimensions.totalRows <= 1}
                 >
                     ➖ Delete Row
@@ -898,7 +895,7 @@ function Grid() {
                 </button>
                 <button
                     onClick={handleDeleteCol}
-                    style={buttonStyle}
+                    style={gridDimensions.totalCols <= 1 ? buttonStyleDisabled : buttonStyle}
                     disabled={gridDimensions.totalCols <= 1}
                 >
                     ➖ Delete Column
@@ -910,28 +907,28 @@ function Grid() {
                     </div>
                     <button
                         onClick={() => handleSortColumn(selectedCell.col, 'asc')}
-                        style={{ ...buttonStyle, backgroundColor: '#4CAF50' }}
+                        style={buttonStyle}
                         title="Sort selected column ascending"
                     >
                         ↑ Sort Col
                     </button>
                     <button
                         onClick={() => handleSortColumn(selectedCell.col, 'desc')}
-                        style={{ ...buttonStyle, backgroundColor: '#FF9800' }}
+                        style={buttonStyle}
                         title="Sort selected column descending"
                     >
                         ↓ Sort Col
                     </button>
                     <button
                         onClick={() => handleSortRow(selectedCell.row, 'asc')}
-                        style={{ ...buttonStyle, backgroundColor: '#2196F3' }}
+                        style={buttonStyle}
                         title="Sort selected row ascending"
                     >
                         ← Sort Row
                     </button>
                     <button
                         onClick={() => handleSortRow(selectedCell.row, 'desc')}
-                        style={{ ...buttonStyle, backgroundColor: '#9C27B0' }}
+                        style={buttonStyle}
                         title="Sort selected row descending"
                     >
                         → Sort Row
@@ -967,14 +964,26 @@ function Grid() {
 
 // Style constants
 const buttonStyle = {
-    backgroundColor: '#2196F3',
+    backgroundColor: '#66BB6A', // Lighter green version of #4CAF50
     color: 'white',
     border: 'none',
     padding: '8px 12px',
     borderRadius: '4px',
     marginRight: '8px',
     cursor: 'pointer',
-    fontSize: '14px'
+    fontSize: '14px',
+    transition: 'background-color 0.2s ease'
+};
+
+const buttonStyleHover = {
+    ...buttonStyle,
+    backgroundColor: '#4CAF50' // Original green for hover
+};
+
+const buttonStyleDisabled = {
+    ...buttonStyle,
+    backgroundColor: '#ccc',
+    cursor: 'not-allowed'
 };
 
 const headerCellStyle = {

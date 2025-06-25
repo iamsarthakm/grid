@@ -70,3 +70,23 @@
 .cell.locked-by-me input {
   color: #2e7d32 !important;
 }
+
+/* Button styles */
+button {
+  transition: background-color 0.2s ease, transform 0.1s ease;
+}
+
+button:hover:not(:disabled) {
+  background-color: #4CAF50 !important;
+  transform: translateY(-1px);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+button:disabled {
+  background-color: #ccc !important;
+  cursor: not-allowed !important;
+  transform: none !important;
+}
