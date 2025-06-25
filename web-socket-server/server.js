@@ -4,15 +4,15 @@ const axios = require('axios');
 
 const wss = new WebSocket.Server({ port: 8080 });
 
-const grid = {}; // { cellId: { rawValue, computedValue, lastUpdated, lastUpdatedBy } }
-const clients = {}; // { connectionId: { ws, userId, position, name } }
+// Remove in-memory grid storage - data comes from Lambda/DynamoDB
+const clients = {}; // { connectionId: { ws, userId, position, name, selectedGridId } }
 
 console.log('WebSocket server running on ws://localhost:8080');
 
 // Lambda-backed functions
 // Lambda endpoint (local or deployed)
-const LAMBDA_ENDPOINT = 'http://lambda-local:9001/2015-03-31/functions/function/invocations';
-const GRID_FILE_ID = 'empty_grid_001'; // Hardcoded for demo, can be dynamic
+// const LAMBDA_ENDPOINT = 'http://lambda-local:9001/2015-03-31/functions/function/invocations';
+const LAMBDA_ENDPOINT = 'http://localhost:9001/2015-03-31/functions/function/invocations';
 
 // Update a cell via Lambda
 async function lam_update_cell(gridFileId, cellCoordinate, rawValue) {
@@ -36,27 +36,34 @@ async function lam_get_grid_data(gridFileId) {
   return response.data;
 }
 
-function ensureGridSize(minRows = 100, minCols = 26) {
-  let maxRow = -1, maxCol = -1;
-  Object.keys(grid).forEach(cellId => {
-    const [r, c] = cellId.split('-').map(Number);
-    if (r > maxRow) maxRow = r;
-    if (c > maxCol) maxCol = c;
-  });
-
-  for (let r = 0; r < Math.max(minRows, maxRow + 1); r++) {
-    for (let c = 0; c < Math.max(minCols, maxCol + 1); c++) {
-      const cellId = `${r}-${c}`;
-      if (!grid[cellId]) {
-        grid[cellId] = {
-          rawValue: '',
-          computedValue: '',
-          lastUpdated: Date.now(),
-          lastUpdatedBy: null
-        };
-      }
+// List all grids via Lambda
+async function lam_list_grids() {
+  const payload = {
+    operation: 'list_grids'
+  };
+  try {
+    console.log('Making request to Lambda:', LAMBDA_ENDPOINT, 'with payload:', payload);
+    const response = await axios.post(LAMBDA_ENDPOINT, payload);
+    console.log('Lambda response received:', response.status, response.data);
+    return response.data;
+  } catch (error) {
+    console.error('Lambda list_grids error:', error.message);
+    if (error.response) {
+      console.error('Response data:', error.response.data);
+      console.error('Response status:', error.response.status);
     }
+    throw error;
   }
+}
+
+// Create a new grid via Lambda
+async function lam_create_grid(name) {
+  const payload = {
+    operation: 'create_grid',
+    name
+  };
+  const response = await axios.post(LAMBDA_ENDPOINT, payload);
+  return response.data;
 }
 
 function broadcastUserList() {
@@ -84,7 +91,8 @@ wss.on('connection', async (ws) => {
     userId: connectionId,
     position: null,
     name: null,  // Initialize name as null
-    color: userColor
+    color: userColor,
+    selectedGridId: null
   };
 
   console.log(`[Connected] ${connectionId}`);
@@ -95,8 +103,6 @@ wss.on('connection', async (ws) => {
     userId: connectionId,
     color: userColor
   }));
-
-  ensureGridSize();
 
   broadcastUserList();
 
@@ -128,16 +134,187 @@ async function handleMessage(senderId, message, ws) {
       broadcastUserList();
       break;
 
+    case 'init-grid': {
+      console.log('Received init-grid request from:', senderId);
+      // Since we removed the hardcoded grid, we need to handle this differently
+      // For now, create a default grid or use the first available grid
+      try {
+        console.log('Calling Lambda list_grids...');
+        const lambdaResp = await lam_list_grids();
+        console.log('Lambda response:', lambdaResp);
+        const body = lambdaResp.body ? JSON.parse(lambdaResp.body) : lambdaResp;
+        const grids = body.grids || [];
+        console.log('Found grids:', grids.length);
+
+        if (grids.length > 0) {
+          // Use the first available grid
+          const firstGrid = grids[0];
+          clients[senderId].selectedGridId = firstGrid.id;
+          console.log('Using existing grid:', firstGrid.id);
+
+          const gridDataResp = await lam_get_grid_data(firstGrid.id);
+          const gridDataBody = gridDataResp.body ? JSON.parse(gridDataResp.body) : gridDataResp;
+          const gridData = convertGridDataToRowCol(gridDataBody.gridData || {});
+
+          ws.send(JSON.stringify({
+            type: 'full-grid',
+            grid: gridData,
+            gridId: firstGrid.id,
+            timestamp: Date.now()
+          }));
+        } else {
+          // No grids exist, create a default one
+          console.log('Creating default grid...');
+          const createResp = await lam_create_grid('Default Grid');
+          const createBody = createResp.body ? JSON.parse(createResp.body) : createResp;
+
+          clients[senderId].selectedGridId = createBody.gridId;
+          console.log('Created grid:', createBody.gridId);
+
+          ws.send(JSON.stringify({
+            type: 'full-grid',
+            grid: {},
+            gridId: createBody.gridId,
+            timestamp: Date.now()
+          }));
+        }
+      } catch (err) {
+        console.error('Lambda init_grid error:', err);
+
+        // Try to create a grid even if listing fails
+        try {
+          console.log('Trying to create a grid as fallback...');
+          const createResp = await lam_create_grid('Fallback Grid');
+          const createBody = createResp.body ? JSON.parse(createResp.body) : createResp;
+
+          clients[senderId].selectedGridId = createBody.gridId;
+          console.log('Created fallback grid:', createBody.gridId);
+
+          ws.send(JSON.stringify({
+            type: 'full-grid',
+            grid: {},
+            gridId: createBody.gridId,
+            timestamp: Date.now()
+          }));
+        } catch (createErr) {
+          console.error('Failed to create fallback grid:', createErr);
+          // Only use a fake grid ID as last resort - this will cause issues
+          const fallbackGridId = 'fallback-grid-' + Date.now();
+          clients[senderId].selectedGridId = fallbackGridId;
+          console.log('Using fake fallback grid:', fallbackGridId);
+
+          ws.send(JSON.stringify({
+            type: 'full-grid',
+            grid: {},
+            gridId: fallbackGridId,
+            timestamp: Date.now()
+          }));
+        }
+      }
+      break;
+    }
+
+    case 'list-grids': {
+      try {
+        const lambdaResp = await lam_list_grids();
+        const body = lambdaResp.body ? JSON.parse(lambdaResp.body) : lambdaResp;
+        ws.send(JSON.stringify({
+          type: 'grid-list',
+          grids: body.grids || [],
+          timestamp: Date.now()
+        }));
+      } catch (err) {
+        console.error('Lambda list_grids error:', err);
+        ws.send(JSON.stringify({
+          type: 'grid-list',
+          grids: [],
+          error: 'Failed to load grids',
+          timestamp: Date.now()
+        }));
+      }
+      break;
+    }
+
+    case 'create-grid': {
+      try {
+        const lambdaResp = await lam_create_grid(message.name);
+        const body = lambdaResp.body ? JSON.parse(lambdaResp.body) : lambdaResp;
+        const newGrid = {
+          id: body.gridId,
+          name: body.name,
+          createdAt: body.createdAt,
+          dimensions: body.dimensions
+        };
+
+        // Send the new grid to the client
+        ws.send(JSON.stringify({
+          type: 'grid-created',
+          grid: newGrid,
+          timestamp: Date.now()
+        }));
+
+        // Also send updated grid list to all clients
+        const listResp = await lam_list_grids();
+        const listBody = listResp.body ? JSON.parse(listResp.body) : listResp;
+        broadcast({
+          type: 'grid-list',
+          grids: listBody.grids || [],
+          timestamp: Date.now()
+        });
+      } catch (err) {
+        console.error('Lambda create_grid error:', err);
+        ws.send(JSON.stringify({
+          type: 'grid-created',
+          error: 'Failed to create grid',
+          timestamp: Date.now()
+        }));
+      }
+      break;
+    }
+
+    case 'select-grid': {
+      clients[senderId].selectedGridId = message.gridId;
+      // Load grid data for the selected grid
+      try {
+        const lambdaResp = await lam_get_grid_data(message.gridId);
+        const body = lambdaResp.body ? JSON.parse(lambdaResp.body) : lambdaResp;
+        const gridData = convertGridDataToRowCol(body.gridData || {});
+        ws.send(JSON.stringify({
+          type: 'full-grid',
+          grid: gridData,
+          gridId: message.gridId,
+          timestamp: Date.now()
+        }));
+      } catch (err) {
+        console.error('Lambda get_grid_data error:', err);
+        ws.send(JSON.stringify({
+          type: 'full-grid',
+          grid: {},
+          gridId: message.gridId,
+          error: 'Failed to load grid data',
+          timestamp: Date.now()
+        }));
+      }
+      break;
+    }
+
     case 'cell-edit': {
       const { cellId, value } = message;
-      // Update in-memory grid and broadcast instantly
-      if (!grid[cellId]) {
-        grid[cellId] = { rawValue: '', computedValue: '', lastUpdated: Date.now(), lastUpdatedBy: senderId };
+      const selectedGridId = clients[senderId].selectedGridId;
+
+      console.log('Cell edit from:', senderId, 'cellId:', cellId, 'value:', value, 'selectedGridId:', selectedGridId);
+
+      if (!selectedGridId) {
+        console.error('No grid selected for cell edit');
+        return;
       }
-      grid[cellId].rawValue = value;
-      grid[cellId].lastUpdated = Date.now();
-      grid[cellId].lastUpdatedBy = senderId;
-      // Broadcast to all clients immediately
+
+      // Convert cellId (e.g., '0-0') to cellRef (e.g., 'A1')
+      const [row, col] = cellId.split('-').map(Number);
+      const cellRef = String.fromCharCode(65 + col) + (row + 1);
+      console.log('Converted cellRef:', cellRef);
+
+      // Broadcast to all clients immediately for real-time feel
       broadcast({
         type: 'cell-update',
         cellId,
@@ -146,15 +323,22 @@ async function handleMessage(senderId, message, ws) {
         lastUpdatedBy: senderId,
         timestamp: Date.now()
       });
+
+      // Skip Lambda call if using a fake grid ID
+      if (selectedGridId.startsWith('fallback-grid-')) {
+        console.log('Skipping Lambda call for fake grid ID');
+        return;
+      }
+
       // Sync to Lambda/DynamoDB in the background
       (async () => {
-        // Convert cellId (e.g., '0-0') to cellRef (e.g., 'A1')
-        const [row, col] = cellId.split('-').map(Number);
-        const cellRef = String.fromCharCode(65 + col) + (row + 1);
         try {
-          const lambdaResp = await lam_update_cell(GRID_FILE_ID, cellRef, value);
+          console.log('Calling Lambda update_cell for grid:', selectedGridId, 'cell:', cellRef);
+          const lambdaResp = await lam_update_cell(selectedGridId, cellRef, value);
+          console.log('Lambda update response:', lambdaResp);
           const body = lambdaResp.body ? JSON.parse(lambdaResp.body) : lambdaResp;
           if (body.changedCells && Array.isArray(body.changedCells)) {
+            console.log('Changed cells:', body.changedCells);
             body.changedCells.forEach(cell => {
               const match = cell.cellCoordinate.match(/^([A-Z]+)(\d+)$/);
               if (match) {
@@ -165,12 +349,7 @@ async function handleMessage(senderId, message, ws) {
                 col -= 1;
                 const row = parseInt(match[2], 10) - 1;
                 const cellIdStr = `${row}-${col}`;
-                // Update in-memory grid with computed value
-                if (!grid[cellIdStr]) grid[cellIdStr] = {};
-                grid[cellIdStr].rawValue = cell.rawValue;
-                grid[cellIdStr].computedValue = cell.computedValue;
-                grid[cellIdStr].lastUpdated = Date.now();
-                grid[cellIdStr].lastUpdatedBy = senderId;
+
                 // Broadcast the computed value
                 broadcast({
                   type: 'cell-update',
@@ -208,27 +387,8 @@ async function handleMessage(senderId, message, ws) {
       // Not implemented in Lambda yet
       break;
 
-    case 'init-grid': {
-      try {
-        const lambdaResp = await lam_get_grid_data(GRID_FILE_ID);
-        const body = lambdaResp.body ? JSON.parse(lambdaResp.body) : lambdaResp;
-        // Update in-memory grid with latest from Lambda
-        const latestGrid = convertGridDataToRowCol(body.gridData);
-        Object.keys(grid).forEach(key => delete grid[key]); // Clear old
-        Object.assign(grid, latestGrid);
-        ws.send(JSON.stringify({
-          type: 'full-grid',
-          grid: latestGrid,
-          timestamp: Date.now()
-        }));
-      } catch (err) {
-        console.error('Lambda get_grid_data error:', err);
-      }
-      break;
-    }
-
     default:
-      console.warn(`Unhandled message type: ${message.type}`);
+      console.warn(`Unhandled message type: ${message.type}`, message);
   }
 }
 

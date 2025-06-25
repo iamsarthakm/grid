@@ -2,7 +2,9 @@ import json
 import logging
 import os
 import re
+import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -10,6 +12,15 @@ from boto3.dynamodb.conditions import Key
 # Setup logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+
+# Custom JSON encoder to handle Decimal types
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return super(DecimalEncoder, self).default(obj)
+
 
 # --- DynamoDB Setup ---
 
@@ -20,10 +31,45 @@ dynamodb = boto3.resource(
     aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
     aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
 )
-table = dynamodb.Table("GridFileValues")
+grid_table = dynamodb.Table("GridFile")
+values_table = dynamodb.Table("GridFileValues")
 
 
 # --- Helper Functions ---
+
+
+def generate_grid_name():
+    """Generate a simple random grid name"""
+    import random
+
+    adjectives = [
+        "Quick",
+        "Smart",
+        "Fast",
+        "Bright",
+        "Clear",
+        "Fresh",
+        "New",
+        "Modern",
+        "Simple",
+        "Easy",
+    ]
+    nouns = [
+        "Grid",
+        "Sheet",
+        "Table",
+        "Data",
+        "Work",
+        "Project",
+        "Task",
+        "List",
+        "Chart",
+        "Report",
+    ]
+    adjective = random.choice(adjectives)
+    noun = random.choice(nouns)
+    number = random.randint(1, 999)
+    return f"{adjective} {noun} {number}"
 
 
 def cell_ref_to_index(ref):
@@ -227,21 +273,100 @@ def find_dependent_cells(grid, changed_cell_ref):
 
 
 def handler(event, context):
-    logger.info(f"Received event: {json.dumps(event)}")
+    logger.info(f"Received event: {json.dumps(event, cls=DecimalEncoder)}")
     try:
         op = event.get("operation")
         if op == "update_cell":
             return update_cell(event)
         elif op == "get_grid_data":
             return get_grid_data(event)
+        elif op == "list_grids":
+            return list_grids(event)
+        elif op == "create_grid":
+            return create_grid(event)
         else:
             return {
                 "statusCode": 400,
-                "body": json.dumps({"error": "Invalid operation"}),
+                "body": json.dumps({"error": "Invalid operation"}, cls=DecimalEncoder),
             }
     except Exception as e:
         logger.error(f"Handler error: {e}")
-        return {"statusCode": 500, "body": json.dumps({"error": str(e)})}
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": str(e)}, cls=DecimalEncoder),
+        }
+
+
+def list_grids(event):
+    """List all available grids"""
+    logger.info("Listing all grids")
+    try:
+        resp = grid_table.scan()
+        grids = []
+        for item in resp.get("Items", []):
+            grids.append(
+                {
+                    "id": item["id"],
+                    "name": item.get("name", "Unnamed Grid"),
+                    "createdAt": item.get("createdAt"),
+                    "updatedAt": item.get("updatedAt"),
+                    "dimensions": item.get(
+                        "dimensions", {"totalRows": 100, "totalCols": 26}
+                    ),
+                }
+            )
+
+        logger.info(f"Found {len(grids)} grids")
+        return {
+            "statusCode": 200,
+            "body": json.dumps({"grids": grids}, cls=DecimalEncoder),
+        }
+    except Exception as e:
+        logger.error(f"Error listing grids: {e}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": str(e)}, cls=DecimalEncoder),
+        }
+
+
+def create_grid(event):
+    """Create a new grid"""
+    logger.info("Creating new grid")
+    try:
+        grid_id = str(uuid.uuid4())
+        grid_name = event.get("name") or generate_grid_name()
+        current_time = datetime.now(timezone.utc).isoformat()
+
+        # Create grid metadata
+        grid_table.put_item(
+            Item={
+                "id": grid_id,
+                "name": grid_name,
+                "createdAt": current_time,
+                "updatedAt": current_time,
+                "dimensions": {"totalRows": 100, "totalCols": 26},
+            }
+        )
+
+        logger.info(f"Created grid '{grid_name}' with ID '{grid_id}'")
+        return {
+            "statusCode": 200,
+            "body": json.dumps(
+                {
+                    "gridId": grid_id,
+                    "name": grid_name,
+                    "createdAt": current_time,
+                    "dimensions": {"totalRows": 100, "totalCols": 26},
+                },
+                cls=DecimalEncoder,
+            ),
+        }
+    except Exception as e:
+        logger.error(f"Error creating grid: {e}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": str(e)}, cls=DecimalEncoder),
+        }
 
 
 def update_cell(event):
@@ -258,7 +383,7 @@ def update_cell(event):
         }
 
     logger.info(f"DB HIT: Querying database for grid '{gridFileId}'")
-    resp = table.query(KeyConditionExpression=Key("gridFileId").eq(gridFileId))
+    resp = values_table.query(KeyConditionExpression=Key("gridFileId").eq(gridFileId))
     items = resp.get("Items", [])
     logger.info(f"DB QUERY Complete: Found {len(items)} items for grid '{gridFileId}'")
 
@@ -311,7 +436,7 @@ def update_cell(event):
 
     # Batch write all changed cells to DynamoDB
     logger.info(f"DB HIT: Starting batch write for {len(changed_cells)} cells.")
-    with table.batch_writer() as batch:
+    with values_table.batch_writer() as batch:
         for cell in changed_cells:
             logger.info(f"DB WRITE: Putting cell '{cell['cellCoordinate']}'")
             batch.put_item(
@@ -325,11 +450,14 @@ def update_cell(event):
             )
     logger.info("DB BATCH WRITE Complete.")
 
-    logger.info(f"Update complete. Changed cells: {json.dumps(changed_cells)}")
+    logger.info(
+        f"Update complete. Changed cells: {json.dumps(changed_cells, cls=DecimalEncoder)}"
+    )
     return {
         "statusCode": 200,
         "body": json.dumps(
-            {"gridFileId": gridFileId, "changedCells": changed_cells, "updatedAt": now}
+            {"gridFileId": gridFileId, "changedCells": changed_cells, "updatedAt": now},
+            cls=DecimalEncoder,
         ),
     }
 
@@ -338,10 +466,13 @@ def get_grid_data(event):
     gridFileId = event.get("gridFileId")
     logger.info(f"Getting grid data for grid '{gridFileId}'")
     if not gridFileId:
-        return {"statusCode": 400, "body": json.dumps({"error": "Missing gridFileId"})}
+        return {
+            "statusCode": 400,
+            "body": json.dumps({"error": "Missing gridFileId"}, cls=DecimalEncoder),
+        }
 
     logger.info(f"DB HIT: Querying database for grid '{gridFileId}'")
-    resp = table.query(KeyConditionExpression=Key("gridFileId").eq(gridFileId))
+    resp = values_table.query(KeyConditionExpression=Key("gridFileId").eq(gridFileId))
     items = resp.get("Items", [])
     logger.info(f"DB QUERY Complete: Found {len(items)} items for grid '{gridFileId}'")
 
@@ -355,5 +486,7 @@ def get_grid_data(event):
     logger.info(f"Returning {len(gridData)} cells for grid '{gridFileId}'")
     return {
         "statusCode": 200,
-        "body": json.dumps({"gridFileId": gridFileId, "gridData": gridData}),
+        "body": json.dumps(
+            {"gridFileId": gridFileId, "gridData": gridData}, cls=DecimalEncoder
+        ),
     }

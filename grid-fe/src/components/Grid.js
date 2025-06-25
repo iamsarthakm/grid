@@ -99,7 +99,7 @@ function Grid() {
     // State
     const [gridData, setGridData] = useState(
         Array.from({ length: ROWS }, () =>
-            Array.from({ length: COLS }, () => ({ value: '' }))
+            Array.from({ length: COLS }, () => ({ rawValue: '', computedValue: '' }))
         )
     );
     const [selectedCell, setSelectedCell] = useState({ row: 0, col: 0 });
@@ -111,6 +111,11 @@ function Grid() {
     const [userName, setUserName] = useState('');
     const [showNameDialog, setShowNameDialog] = useState(true);
     const [lastUpdatedCells, setLastUpdatedCells] = useState({});
+
+    // New state for grid selection
+    const [grids, setGrids] = useState([]);
+    const [selectedGridId, setSelectedGridId] = useState('');
+    const [showGridDropdown, setShowGridDropdown] = useState(false);
 
     // Refs
     const cellRefs = useRef({});
@@ -150,10 +155,29 @@ function Grid() {
 
     const handleRemoteCellUpdate = (msg) => {
         const { row, col } = getCellPosFromId(msg.cellId);
+        const cellKey = getCellId(row, col);
+
+        // Don't update if this cell is currently being edited by the local user
+        const isCurrentlyEditing = editingCell?.row === row && editingCell?.col === col;
+        if (isCurrentlyEditing) {
+            return;
+        }
+
         setGridData(prev => {
             const newGrid = [...prev];
-            if (!newGrid[row]) newGrid[row] = [];
-            if (!newGrid[row][col]) newGrid[row][col] = { rawValue: '', computedValue: '' };
+            // Ensure the grid has enough rows and columns
+            while (newGrid.length <= row) {
+                newGrid.push(Array.from({ length: COLS }, () => ({ rawValue: '', computedValue: '' })));
+            }
+            if (!newGrid[row]) {
+                newGrid[row] = Array.from({ length: COLS }, () => ({ rawValue: '', computedValue: '' }));
+            }
+            while (newGrid[row].length <= col) {
+                newGrid[row].push({ rawValue: '', computedValue: '' });
+            }
+            if (!newGrid[row][col]) {
+                newGrid[row][col] = { rawValue: '', computedValue: '' };
+            }
             newGrid[row][col] = {
                 ...newGrid[row][col],
                 rawValue: msg.rawValue,
@@ -164,12 +188,12 @@ function Grid() {
         });
         setLastUpdatedCells(prev => ({
             ...prev,
-            [msg.cellId]: Date.now()
+            [cellKey]: Date.now()
         }));
         setTimeout(() => {
             setLastUpdatedCells(prev => {
                 const newState = { ...prev };
-                delete newState[msg.cellId];
+                delete newState[cellKey];
                 return newState;
             });
         }, 100);
@@ -177,7 +201,7 @@ function Grid() {
 
     const handleRowAdded = (msg) => {
         setGridData(prev => {
-            const newRow = Array.from({ length: msg.colCount }, () => ({ value: '' }));
+            const newRow = Array.from({ length: msg.colCount }, () => ({ rawValue: '', computedValue: '' }));
             return [...prev, newRow];
         });
     };
@@ -188,7 +212,35 @@ function Grid() {
                 type: 'set-name',
                 name: userName.trim()
             }));
-            setShowNameDialog(false);
+            // Request grid list immediately
+            ws.send(JSON.stringify({ type: 'list-grids' }));
+            setShowGridDropdown(true);
+        }
+    };
+
+    const handleGridSelection = (gridId) => {
+        setSelectedGridId(gridId);
+        setShowNameDialog(false);
+        if (ws?.readyState === 1) {
+            ws.send(JSON.stringify({
+                type: 'select-grid',
+                gridId
+            }));
+        }
+    };
+
+    const handleCreateNewGrid = () => {
+        if (ws?.readyState === 1) {
+            ws.send(JSON.stringify({
+                type: 'create-grid',
+                name: ''
+            }));
+        }
+    };
+
+    const handleJoinSpreadsheet = () => {
+        if (selectedGridId && selectedGridId !== 'create-new') {
+            handleGridSelection(selectedGridId);
         }
     };
 
@@ -213,6 +265,20 @@ function Grid() {
 
     // Replace handleCellEdit with debounced version
     const handleCellEdit = (row, col, value) => {
+        // Update local state immediately for responsive UI
+        setGridData(prev => {
+            const newGrid = [...prev];
+            if (!newGrid[row]) newGrid[row] = [];
+            if (!newGrid[row][col]) newGrid[row][col] = { rawValue: '', computedValue: '' };
+            newGrid[row][col] = {
+                ...newGrid[row][col],
+                rawValue: value
+                // Don't update computedValue here - let server handle it
+            };
+            return newGrid;
+        });
+
+        // Send to server with debouncing
         debouncedCellEdit(row, col, value);
     };
 
@@ -246,8 +312,9 @@ function Grid() {
         setWs(socket);
 
         socket.onopen = () => {
-            // Request initial grid from server
-            socket.send(JSON.stringify({ type: 'init-grid' }));
+            // Request grid list immediately when connected
+            socket.send(JSON.stringify({ type: 'list-grids' }));
+            setShowGridDropdown(true);
         };
 
         socket.onmessage = (event) => {
@@ -262,6 +329,17 @@ function Grid() {
 
                     case 'user-list':
                         updateUserPresence(msg.users);
+                        break;
+
+                    case 'grid-list':
+                        setGrids(msg.grids || []);
+                        break;
+
+                    case 'grid-created':
+                        if (msg.grid && !msg.error) {
+                            // Auto-select the newly created grid
+                            handleGridSelection(msg.grid.id);
+                        }
                         break;
 
                     case 'cell-update':
@@ -287,7 +365,7 @@ function Grid() {
                         break;
 
                     case 'col-added':
-                        setGridData(prev => prev.map(row => [...row, { value: '' }]));
+                        setGridData(prev => prev.map(row => [...row, { rawValue: '', computedValue: '' }]));
                         break;
 
                     case 'col-deleted':
@@ -295,30 +373,35 @@ function Grid() {
                         break;
 
                     case 'full-grid':
-                        const keys = Object.keys(msg.grid);
-                        if (keys.length === 0) {
-                            setGridData(Array.from({ length: ROWS }, () =>
+                        if (msg.grid) {
+                            // Always create a full 100x26 grid first
+                            const newGrid = Array.from({ length: ROWS }, () =>
                                 Array.from({ length: COLS }, () => ({ rawValue: '', computedValue: '' }))
-                            ));
-                        } else {
-                            let maxRow = 0, maxCol = 0;
-                            keys.forEach(cellId => {
-                                const [r, c] = cellId.split('-').map(Number);
-                                if (r > maxRow) maxRow = r;
-                                if (c > maxCol) maxCol = c;
-                            });
-                            const newGrid = [];
-                            for (let r = 0; r <= maxRow; r++) {
-                                const row = [];
-                                for (let c = 0; c <= maxCol; c++) {
-                                    const cell = msg.grid[`${r}-${c}`];
-                                    row.push(cell ? { rawValue: cell.rawValue, computedValue: cell.computedValue } : { rawValue: '', computedValue: '' });
+                            );
+
+                            // Fill in the actual data from sparse grid
+                            Object.keys(msg.grid).forEach(cellId => {
+                                const { row, col } = getCellPosFromId(cellId);
+                                if (row >= 0 && row < ROWS && col >= 0 && col < COLS) {
+                                    newGrid[row][col] = {
+                                        rawValue: msg.grid[cellId].rawValue || '',
+                                        computedValue: msg.grid[cellId].computedValue || ''
+                                    };
                                 }
-                                newGrid.push(row);
-                            }
+                            });
+
                             setGridData(newGrid);
+                        } else {
+                            // If no grid data, still create empty full grid
+                            const emptyGrid = Array.from({ length: ROWS }, () =>
+                                Array.from({ length: COLS }, () => ({ rawValue: '', computedValue: '' }))
+                            );
+                            setGridData(emptyGrid);
                         }
                         break;
+
+                    default:
+                        console.warn(`Unhandled message type: ${msg.type}`);
                 }
             } catch (e) {
                 console.error('Error processing message:', e);
@@ -380,6 +463,8 @@ function Grid() {
         const isSelected = selectedCell.row === rowIdx && selectedCell.col === colIdx;
         const isEditing = editingCell?.row === rowIdx && editingCell?.col === colIdx;
         const cell = gridData[rowIdx]?.[colIdx] || { rawValue: '', computedValue: '' };
+
+        // Show rawValue when editing, computedValue when not editing
         const cellValue = isEditing ? cell.rawValue : cell.computedValue;
 
         const usersHere = Object.entries(otherUsers)
@@ -459,61 +544,99 @@ function Grid() {
         );
     };
 
-    return (
-        <div style={{ position: 'relative', padding: '20px' }}>
-            {showNameDialog && (
+    // Render name dialog
+    if (showNameDialog) {
+        return (
+            <div style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: 'rgba(0,0,0,0.5)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 1000
+            }}>
                 <div style={{
-                    position: 'fixed',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    backgroundColor: 'rgba(0,0,0,0.5)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    zIndex: 1000
+                    backgroundColor: 'white',
+                    padding: '20px',
+                    borderRadius: '8px',
+                    width: '300px',
+                    textAlign: 'center'
                 }}>
-                    <div style={{
-                        backgroundColor: 'white',
-                        padding: '20px',
-                        borderRadius: '8px',
-                        width: '300px',
-                        textAlign: 'center'
-                    }}>
-                        <h3>Enter Your Name</h3>
-                        <input
-                            type="text"
-                            value={userName}
-                            onChange={(e) => setUserName(e.target.value)}
-                            placeholder="Your name"
+                    <h3>Enter Your Name</h3>
+                    <input
+                        type="text"
+                        value={userName}
+                        onChange={(e) => setUserName(e.target.value)}
+                        placeholder="Your name"
+                        style={{
+                            width: '100%',
+                            padding: '8px',
+                            margin: '10px 0',
+                            fontSize: '16px',
+                            boxSizing: 'border-box'
+                        }}
+                        onKeyPress={(e) => e.key === 'Enter' && handleSetName()}
+                    />
+
+                    <div style={{ marginTop: '10px' }}>
+                        <h4 style={{ margin: '10px 0', fontSize: '14px' }}>Select a Spreadsheet:</h4>
+                        <select
+                            value={selectedGridId}
+                            onChange={(e) => {
+                                if (e.target.value === 'create-new') {
+                                    handleCreateNewGrid();
+                                } else if (e.target.value) {
+                                    setSelectedGridId(e.target.value);
+                                }
+                            }}
                             style={{
                                 width: '100%',
                                 padding: '8px',
-                                margin: '10px 0',
-                                fontSize: '16px',
-                                boxSizing: 'border-box'
+                                fontSize: '14px',
+                                border: '1px solid #ddd',
+                                borderRadius: '4px',
+                                marginBottom: '10px'
                             }}
-                            onKeyPress={(e) => e.key === 'Enter' && handleSetName()}
-                        />
+                        >
+                            <option value="">Select a spreadsheet...</option>
+                            <option value="create-new" style={{ fontWeight: 'bold' }}>
+                                ➕ Create New Spreadsheet
+                            </option>
+                            {grids.map(grid => (
+                                <option key={grid.id} value={grid.id}>
+                                    📊 {grid.name} ({new Date(grid.createdAt).toLocaleDateString()})
+                                </option>
+                            ))}
+                        </select>
+
                         <button
-                            onClick={handleSetName}
+                            onClick={handleJoinSpreadsheet}
+                            disabled={!selectedGridId || selectedGridId === 'create-new'}
                             style={{
-                                backgroundColor: '#4CAF50',
+                                backgroundColor: selectedGridId && selectedGridId !== 'create-new' ? '#4CAF50' : '#ccc',
                                 color: 'white',
                                 border: 'none',
                                 padding: '10px 15px',
                                 borderRadius: '4px',
-                                cursor: 'pointer',
-                                fontSize: '16px'
+                                cursor: selectedGridId && selectedGridId !== 'create-new' ? 'pointer' : 'not-allowed',
+                                fontSize: '16px',
+                                width: '100%'
                             }}
                         >
                             Join Spreadsheet
                         </button>
                     </div>
                 </div>
-            )}
+            </div>
+        );
+    }
 
+    return (
+        <div style={{ position: 'relative', padding: '20px' }}>
             <div style={{
                 position: 'fixed',
                 top: '10px',
