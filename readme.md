@@ -25,11 +25,24 @@ The project is built with a microservices-oriented architecture, with each compo
 
 ## ✨ Features
 
--   Real-time, multi-user collaboration.
--   See other users' cursors and their live edits.
--   Basic formula support (`SUM`, `AVG`, `COUNT`) with dependency tracking.
--   Data is persisted in a DynamoDB database.
--   The entire stack is containerized for one-command setup.
+- **Real-time, multi-user collaboration** with live cursors and user presence
+- **Grid Interface**: 26 columns (A-Z), 100+ rows, keyboard navigation, responsive design
+- **Cell Editing**: Double-click or Enter to edit, visual selection indicators
+- **Formula Support**: `=SUM()`, `=AVERAGE()`, `=COUNT()`
+- **Row/Column Operations**: Add and delete rows/columns dynamically
+- **Sorting**: Sort by column (ascending/descending) and row (ascending/descending)
+- **Conflict Resolution**: Cell locking prevents simultaneous edits
+- **Grid Management**: Create new spreadsheets, select existing ones
+- **Data Persistence**: All data stored in DynamoDB with real-time sync
+
+## 🐛 Known Limitations
+
+1. **No copy/paste**: Not implemented yet (core requirement)
+2. **Limited formulas**: Only SUM, AVERAGE, COUNT implemented
+3. **No cell formatting**: Basic text only
+4. **No undo/redo**: No command history
+5. **No data import/export**: Manual data entry only
+6. **Single grid per session**: No multiple sheets support
 
 ---
 
