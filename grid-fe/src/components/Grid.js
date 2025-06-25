@@ -356,6 +356,26 @@ function Grid() {
         }
     };
 
+    const handleSortColumn = (columnIndex, direction = 'asc') => {
+        if (ws?.readyState === 1) {
+            ws.send(JSON.stringify({
+                type: 'sort-column',
+                columnIndex,
+                direction
+            }));
+        }
+    };
+
+    const handleSortRow = (rowIndex, direction = 'asc') => {
+        if (ws?.readyState === 1) {
+            ws.send(JSON.stringify({
+                type: 'sort-row',
+                rowIndex,
+                direction
+            }));
+        }
+    };
+
     // WebSocket connection
     useEffect(() => {
         const socket = new WebSocket('ws://localhost:8080');
@@ -463,7 +483,8 @@ function Grid() {
                         break;
 
                     case 'grid-dimension-error':
-                        console.error('Grid dimension error:', msg.error);
+                    case 'grid-operation-error':
+                        console.error('Grid operation error:', msg.error);
                         // You could add a toast notification here to show the error to the user
                         alert(`Grid operation failed: ${msg.error}`);
                         break;
@@ -779,6 +800,40 @@ function Grid() {
                 >
                     ➖ Delete Column
                 </button>
+                <div style={{ marginLeft: '20px', borderLeft: '1px solid #ddd', paddingLeft: '20px' }}>
+                    <span style={{ fontSize: '14px', color: '#666', marginRight: '10px' }}>Sort:</span>
+                    <div style={{ fontSize: '12px', color: '#999', marginBottom: '5px' }}>
+                        Selected: {colHeaders[selectedCell.col]}{selectedCell.row + 1}
+                    </div>
+                    <button
+                        onClick={() => handleSortColumn(selectedCell.col, 'asc')}
+                        style={{ ...buttonStyle, backgroundColor: '#4CAF50' }}
+                        title="Sort selected column ascending"
+                    >
+                        ↑ Sort Col
+                    </button>
+                    <button
+                        onClick={() => handleSortColumn(selectedCell.col, 'desc')}
+                        style={{ ...buttonStyle, backgroundColor: '#FF9800' }}
+                        title="Sort selected column descending"
+                    >
+                        ↓ Sort Col
+                    </button>
+                    <button
+                        onClick={() => handleSortRow(selectedCell.row, 'asc')}
+                        style={{ ...buttonStyle, backgroundColor: '#2196F3' }}
+                        title="Sort selected row ascending"
+                    >
+                        ← Sort Row
+                    </button>
+                    <button
+                        onClick={() => handleSortRow(selectedCell.row, 'desc')}
+                        style={{ ...buttonStyle, backgroundColor: '#9C27B0' }}
+                        title="Sort selected row descending"
+                    >
+                        → Sort Row
+                    </button>
+                </div>
             </div>
 
             <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 150px)' }}>

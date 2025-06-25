@@ -106,6 +106,30 @@ async function lam_delete_column(gridFileId) {
   return response.data;
 }
 
+// Sort column via Lambda
+async function lam_sort_column(gridFileId, columnIndex, direction) {
+  const payload = {
+    operation: 'sort_column',
+    gridFileId,
+    columnIndex,
+    direction
+  };
+  const response = await axios.post(LAMBDA_ENDPOINT, payload);
+  return response.data;
+}
+
+// Sort row via Lambda
+async function lam_sort_row(gridFileId, rowIndex, direction) {
+  const payload = {
+    operation: 'sort_row',
+    gridFileId,
+    rowIndex,
+    direction
+  };
+  const response = await axios.post(LAMBDA_ENDPOINT, payload);
+  return response.data;
+}
+
 function broadcastUserList() {
   const userList = Object.values(clients)
     .filter(client => client.name) // Only users who have set their name
@@ -429,12 +453,14 @@ async function handleMessage(senderId, message, ws) {
     case 'add-row':
     case 'delete-row':
     case 'add-col':
-    case 'delete-col': {
+    case 'delete-col':
+    case 'sort-column':
+    case 'sort-row': {
       const selectedGridId = clients[senderId].selectedGridId;
 
       if (!selectedGridId) {
         ws.send(JSON.stringify({
-          type: 'grid-dimension-error',
+          type: 'grid-operation-error',
           error: 'No grid selected',
           timestamp: Date.now()
         }));
@@ -444,7 +470,7 @@ async function handleMessage(senderId, message, ws) {
       // Skip Lambda call if using a fake grid ID
       if (selectedGridId.startsWith('fallback-grid-')) {
         ws.send(JSON.stringify({
-          type: 'grid-dimension-error',
+          type: 'grid-operation-error',
           error: 'Cannot modify fallback grid',
           timestamp: Date.now()
         }));
@@ -472,33 +498,66 @@ async function handleMessage(senderId, message, ws) {
             lambdaResp = await lam_delete_column(selectedGridId);
             operation = 'delete_column';
             break;
+          case 'sort-column':
+            lambdaResp = await lam_sort_column(selectedGridId, message.columnIndex, message.direction);
+            operation = 'sort_column';
+            break;
+          case 'sort-row':
+            lambdaResp = await lam_sort_row(selectedGridId, message.rowIndex, message.direction);
+            operation = 'sort_row';
+            break;
         }
 
         const body = lambdaResp.body ? JSON.parse(lambdaResp.body) : lambdaResp;
 
         if (body.error) {
           ws.send(JSON.stringify({
-            type: 'grid-dimension-error',
+            type: 'grid-operation-error',
             error: body.error,
             timestamp: Date.now()
           }));
           return;
         }
 
-        // Broadcast the dimension change to all clients
-        broadcast({
-          type: 'grid-dimensions-changed',
-          gridId: selectedGridId,
-          newDimensions: body.newDimensions,
-          operation: operation,
-          timestamp: Date.now()
-        });
+        // For sorting operations, we need to reload the grid data
+        if (operation === 'sort_column' || operation === 'sort_row') {
+          // Reload grid data after sorting
+          const gridDataResp = await lam_get_grid_data(selectedGridId);
+          const gridDataBody = gridDataResp.body ? JSON.parse(gridDataResp.body) : gridDataResp;
+          const gridData = convertGridDataToRowCol(gridDataBody.gridData || {});
+          const dimensions = gridDataBody.dimensions || { totalRows: 100, totalCols: 26 };
 
-        console.log(`Grid dimensions updated: ${operation} for grid ${selectedGridId}`);
+          // Broadcast the updated grid to all clients
+          broadcast({
+            type: 'full-grid',
+            grid: gridData,
+            gridId: selectedGridId,
+            dimensions: dimensions,
+            operation: operation,
+            sortInfo: {
+              columnIndex: body.columnIndex,
+              rowIndex: body.rowIndex,
+              direction: body.direction,
+              movedCells: body.movedCells
+            },
+            timestamp: Date.now()
+          });
+        } else {
+          // For dimension changes, broadcast the dimension change
+          broadcast({
+            type: 'grid-dimensions-changed',
+            gridId: selectedGridId,
+            newDimensions: body.newDimensions,
+            operation: operation,
+            timestamp: Date.now()
+          });
+        }
+
+        console.log(`Grid operation completed: ${operation} for grid ${selectedGridId}`);
       } catch (err) {
         console.error(`Lambda ${message.type} error:`, err);
         ws.send(JSON.stringify({
-          type: 'grid-dimension-error',
+          type: 'grid-operation-error',
           error: `Failed to ${message.type.replace('-', ' ')}`,
           timestamp: Date.now()
         }));

@@ -292,6 +292,10 @@ def handler(event, context):
             return add_column(event)
         elif op == "delete_column":
             return delete_column(event)
+        elif op == "sort_column":
+            return sort_column(event)
+        elif op == "sort_row":
+            return sort_row(event)
         else:
             return {
                 "statusCode": 400,
@@ -832,6 +836,356 @@ def delete_column(event):
         }
     except Exception as e:
         logger.error(f"Error deleting column: {e}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": str(e)}, cls=DecimalEncoder),
+        }
+
+
+def sort_column(event):
+    """Sort data by column (ascending or descending)"""
+    gridFileId = event.get("gridFileId")
+    column_index = event.get("columnIndex")  # 0-based index
+    sort_direction = event.get("direction", "asc")  # "asc" or "desc"
+
+    logger.info(
+        f"Sorting column {column_index} in {sort_direction} direction for grid '{gridFileId}'"
+    )
+
+    if not gridFileId or column_index is None:
+        return {
+            "statusCode": 400,
+            "body": json.dumps(
+                {"error": "Missing gridFileId or columnIndex"}, cls=DecimalEncoder
+            ),
+        }
+
+    try:
+        # Get current grid dimensions
+        grid_resp = grid_table.get_item(Key={"id": gridFileId})
+        if "Item" not in grid_resp:
+            return {
+                "statusCode": 404,
+                "body": json.dumps({"error": "Grid not found"}, cls=DecimalEncoder),
+            }
+
+        current_dimensions = grid_resp["Item"].get(
+            "dimensions", {"totalRows": 100, "totalCols": 26}
+        )
+        current_rows = int(current_dimensions["totalRows"])
+        current_cols = int(current_dimensions["totalCols"])
+
+        # Validate column index
+        if column_index < 0 or column_index >= current_cols:
+            return {
+                "statusCode": 400,
+                "body": json.dumps(
+                    {"error": f"Invalid column index: {column_index}"},
+                    cls=DecimalEncoder,
+                ),
+            }
+
+        # Get all grid data
+        resp = values_table.query(
+            KeyConditionExpression=Key("gridFileId").eq(gridFileId)
+        )
+        items = resp.get("Items", [])
+
+        # Convert column index to letter (e.g., 0 -> A, 1 -> B, 26 -> AA)
+        col_letter = ""
+        temp_col = column_index + 1
+        while temp_col > 0:
+            temp_col, remainder = divmod(temp_col - 1, 26)
+            col_letter = chr(65 + remainder) + col_letter
+
+        logger.info(f"Sorting column {col_letter} (index {column_index})")
+
+        # Extract column data with row numbers
+        column_data = []
+        for item in items:
+            cell_coord = item["cellCoordinate"]
+            if cell_coord.startswith(col_letter):
+                try:
+                    row_num = int(cell_coord[len(col_letter) :])
+                    column_data.append(
+                        {
+                            "row": row_num,
+                            "cellCoordinate": cell_coord,
+                            "rawValue": item.get("rawValue", ""),
+                            "computedValue": item.get("value", ""),
+                        }
+                    )
+                except ValueError:
+                    continue
+
+        # Sort the column data
+        if sort_direction == "asc":
+            column_data.sort(
+                key=lambda x: (x["computedValue"] == "", x["computedValue"])
+            )
+        else:  # desc
+            column_data.sort(
+                key=lambda x: (x["computedValue"] == "", x["computedValue"]),
+                reverse=True,
+            )
+
+        # Create mapping of old row -> new row
+        row_mapping = {}
+        for i, data in enumerate(column_data):
+            old_row = data["row"]
+            new_row = i + 1
+            row_mapping[old_row] = new_row
+
+        # Get all cells that need to be moved
+        all_cells = {}
+        for item in items:
+            cell_coord = item["cellCoordinate"]
+            match = re.match(r"^([A-Z]+)(\d+)$", cell_coord)
+            if match:
+                col_ref = match.group(1)
+                row_num = int(match.group(2))
+                if row_num in row_mapping:
+                    all_cells[cell_coord] = {
+                        "colRef": col_ref,
+                        "oldRow": row_num,
+                        "newRow": row_mapping[row_num],
+                        "rawValue": item.get("rawValue", ""),
+                        "computedValue": item.get("value", ""),
+                    }
+
+        # Delete all existing cells
+        for cell_coord in all_cells.keys():
+            try:
+                values_table.delete_item(
+                    Key={"gridFileId": gridFileId, "cellCoordinate": cell_coord}
+                )
+            except Exception as e:
+                logger.warning(f"Could not delete cell {cell_coord}: {e}")
+
+        # Insert cells in new positions
+        new_cells = []
+        for cell_coord, cell_data in all_cells.items():
+            new_cell_coord = f"{cell_data['colRef']}{cell_data['newRow']}"
+
+            # Skip empty cells (don't store them in database)
+            if cell_data["rawValue"].strip() or cell_data["computedValue"].strip():
+                new_cells.append(
+                    {
+                        "gridFileId": gridFileId,
+                        "cellCoordinate": new_cell_coord,
+                        "rawValue": cell_data["rawValue"],
+                        "value": cell_data["computedValue"],
+                    }
+                )
+
+        # Batch write new cells
+        if new_cells:
+            with values_table.batch_writer() as batch:
+                for cell in new_cells:
+                    batch.put_item(Item=cell)
+
+        logger.info(f"Sorted column {col_letter}. Moved {len(new_cells)} cells.")
+
+        return {
+            "statusCode": 200,
+            "body": json.dumps(
+                {
+                    "gridFileId": gridFileId,
+                    "columnIndex": column_index,
+                    "columnLetter": col_letter,
+                    "direction": sort_direction,
+                    "movedCells": len(new_cells),
+                    "operation": "sort_column",
+                },
+                cls=DecimalEncoder,
+            ),
+        }
+
+    except Exception as e:
+        logger.error(f"Error sorting column: {e}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": str(e)}, cls=DecimalEncoder),
+        }
+
+
+def sort_row(event):
+    """Sort data by row (ascending or descending)"""
+    gridFileId = event.get("gridFileId")
+    row_index = event.get("rowIndex")  # 0-based index
+    sort_direction = event.get("direction", "asc")  # "asc" or "desc"
+
+    logger.info(
+        f"Sorting row {row_index} in {sort_direction} direction for grid '{gridFileId}'"
+    )
+
+    if not gridFileId or row_index is None:
+        return {
+            "statusCode": 400,
+            "body": json.dumps(
+                {"error": "Missing gridFileId or rowIndex"}, cls=DecimalEncoder
+            ),
+        }
+
+    try:
+        # Get current grid dimensions
+        grid_resp = grid_table.get_item(Key={"id": gridFileId})
+        if "Item" not in grid_resp:
+            return {
+                "statusCode": 404,
+                "body": json.dumps({"error": "Grid not found"}, cls=DecimalEncoder),
+            }
+
+        current_dimensions = grid_resp["Item"].get(
+            "dimensions", {"totalRows": 100, "totalCols": 26}
+        )
+        current_rows = int(current_dimensions["totalRows"])
+        current_cols = int(current_dimensions["totalCols"])
+
+        # Validate row index
+        if row_index < 0 or row_index >= current_rows:
+            return {
+                "statusCode": 400,
+                "body": json.dumps(
+                    {"error": f"Invalid row index: {row_index}"}, cls=DecimalEncoder
+                ),
+            }
+
+        # Get all grid data
+        resp = values_table.query(
+            KeyConditionExpression=Key("gridFileId").eq(gridFileId)
+        )
+        items = resp.get("Items", [])
+
+        target_row = row_index + 1  # Convert to 1-based row number
+
+        logger.info(f"Sorting row {target_row} (index {row_index})")
+
+        # Extract row data with column letters
+        row_data = []
+        for item in items:
+            cell_coord = item["cellCoordinate"]
+            match = re.match(r"^([A-Z]+)(\d+)$", cell_coord)
+            if match:
+                col_ref = match.group(1)
+                row_num = int(match.group(2))
+                if row_num == target_row:
+                    # Convert column letter to index for sorting
+                    col_index = 0
+                    for char in col_ref:
+                        col_index = col_index * 26 + (ord(char) - ord("A") + 1)
+                    col_index -= 1
+
+                    row_data.append(
+                        {
+                            "colIndex": col_index,
+                            "colRef": col_ref,
+                            "cellCoordinate": cell_coord,
+                            "rawValue": item.get("rawValue", ""),
+                            "computedValue": item.get("value", ""),
+                        }
+                    )
+
+        # Sort the row data
+        if sort_direction == "asc":
+            row_data.sort(key=lambda x: (x["computedValue"] == "", x["computedValue"]))
+        else:  # desc
+            row_data.sort(
+                key=lambda x: (x["computedValue"] == "", x["computedValue"]),
+                reverse=True,
+            )
+
+        # Create mapping of old column -> new column
+        col_mapping = {}
+        for i, data in enumerate(row_data):
+            old_col_index = data["colIndex"]
+            new_col_index = i
+            col_mapping[old_col_index] = new_col_index
+
+        # Convert new column indices back to letters
+        new_col_letters = {}
+        for old_col_index, new_col_index in col_mapping.items():
+            new_col_letter = ""
+            temp_col = new_col_index + 1
+            while temp_col > 0:
+                temp_col, remainder = divmod(temp_col - 1, 26)
+                new_col_letter = chr(65 + remainder) + new_col_letter
+            new_col_letters[old_col_index] = new_col_letter
+
+        # Get all cells that need to be moved (only in the target row)
+        cells_to_move = {}
+        for item in items:
+            cell_coord = item["cellCoordinate"]
+            match = re.match(r"^([A-Z]+)(\d+)$", cell_coord)
+            if match:
+                col_ref = match.group(1)
+                row_num = int(match.group(2))
+                if row_num == target_row:
+                    # Convert column letter to index
+                    col_index = 0
+                    for char in col_ref:
+                        col_index = col_index * 26 + (ord(char) - ord("A") + 1)
+                    col_index -= 1
+
+                    if col_index in col_mapping:
+                        cells_to_move[cell_coord] = {
+                            "oldColIndex": col_index,
+                            "newColIndex": col_mapping[col_index],
+                            "newColRef": new_col_letters[col_index],
+                            "rawValue": item.get("rawValue", ""),
+                            "computedValue": item.get("value", ""),
+                        }
+
+        # Delete all existing cells in the target row
+        for cell_coord in cells_to_move.keys():
+            try:
+                values_table.delete_item(
+                    Key={"gridFileId": gridFileId, "cellCoordinate": cell_coord}
+                )
+            except Exception as e:
+                logger.warning(f"Could not delete cell {cell_coord}: {e}")
+
+        # Insert cells in new positions
+        new_cells = []
+        for cell_coord, cell_data in cells_to_move.items():
+            new_cell_coord = f"{cell_data['newColRef']}{target_row}"
+
+            # Skip empty cells (don't store them in database)
+            if cell_data["rawValue"].strip() or cell_data["computedValue"].strip():
+                new_cells.append(
+                    {
+                        "gridFileId": gridFileId,
+                        "cellCoordinate": new_cell_coord,
+                        "rawValue": cell_data["rawValue"],
+                        "value": cell_data["computedValue"],
+                    }
+                )
+
+        # Batch write new cells
+        if new_cells:
+            with values_table.batch_writer() as batch:
+                for cell in new_cells:
+                    batch.put_item(Item=cell)
+
+        logger.info(f"Sorted row {target_row}. Moved {len(new_cells)} cells.")
+
+        return {
+            "statusCode": 200,
+            "body": json.dumps(
+                {
+                    "gridFileId": gridFileId,
+                    "rowIndex": row_index,
+                    "rowNumber": target_row,
+                    "direction": sort_direction,
+                    "movedCells": len(new_cells),
+                    "operation": "sort_row",
+                },
+                cls=DecimalEncoder,
+            ),
+        }
+
+    except Exception as e:
+        logger.error(f"Error sorting row: {e}")
         return {
             "statusCode": 500,
             "body": json.dumps({"error": str(e)}, cls=DecimalEncoder),
